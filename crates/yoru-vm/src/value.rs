@@ -184,6 +184,28 @@ impl Value {
         self.display_d(0)
     }
 
+    /// 带模块上下文的观测格式化（27 号 A3）：Variant 顶层反查 tag 名，
+    /// 载荷递归。resolver(tag_id, variant_id) → Some(格式化名) 或 None
+    /// （fallback 到 `<variant N>` 原样）。仅用于 print/错误消息/CLI 等
+    /// 观测面——值布局与 display() 本体不变；嵌套容器内层走 display_d
+    /// （错误身份主要在顶层值，容器内嵌 Variant 场景属诊断增强，暂不递归）。
+    pub fn display_with<F>(&self, resolve: &mut F) -> String
+    where
+        F: FnMut(u32, u32) -> Option<String>,
+    {
+        match self {
+            Value::Variant(v) => {
+                let name = resolve(v.tag, v.variant)
+                    .unwrap_or_else(|| format!("<variant {}>", v.variant));
+                match &v.payload {
+                    Some(p) => format!("{name}({})", p.display()),
+                    None => name,
+                }
+            }
+            other => other.display(),
+        }
+    }
+
     fn display_d(&self, depth: u32) -> String {
         if depth > Self::MAX_RECURSE_DEPTH {
             return "...".into();

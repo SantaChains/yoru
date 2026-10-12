@@ -95,6 +95,19 @@ mod tests {
     // ===== 决策 26：int/float 严格 as =====
 
     #[test]
+    fn rune_int_as_roundtrip_allowed() {
+        // 决策 81（27 号 A4 裁决方案①）：rune = distinct int 内建等价，
+        // distinct 往返在决策 26 as 许可范围；lower CONVERT_RUNE / VM 码点
+        // 域检查早已实现，此前仅 check_cast 漏列内建 Ty::Rune（Y-T0011 误拦）。
+        let ok = errors(
+            "fn f(r: rune) -> int {\n    return r as int\n}\nfn g(n: int) -> rune {\n    return n as rune\n}\n",
+        );
+        assert!(ok.is_empty(), "rune↔int as 不应报错: {ok:#?}");
+        let bad = errors("fn f(r: rune) -> float {\n    return r as float\n}\n");
+        assert_eq!(codes(&bad), vec!["Y-T0011"], "{bad:#?}");
+    }
+
+    #[test]
     fn unwrap_on_narrowed_ident_allowed() {
         // D-04（26 号登记）：nil 收窄（决策 40）后 `o!` 是恒等解包，
         // 曾被 Y-T0004 误拦且诊断自相矛盾（帮助文本自己建议先做 nil 检查）。

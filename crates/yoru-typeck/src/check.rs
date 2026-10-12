@@ -1892,6 +1892,11 @@ impl<'e> Checker<'e> {
         };
         let ok = match (from, to) {
             (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => true,
+            // rune↔int（决策 81，27 号 A4 裁决方案①）：rune = distinct int
+            // 内建等价（18 §46），distinct 往返本在决策 26 as 许可范围；
+            // lower CONVERT_RUNE / VM 码点域检查（char::from_u32）早已实现，
+            // 此前仅本处漏列内建 Ty::Rune 导致三处矛盾。
+            (Ty::Rune, Ty::Int) | (Ty::Int, Ty::Rune) | (Ty::Rune, Ty::Rune) => true,
             _ => {
                 if let Some(fb) = base_of(self, to) {
                     from.same(&fb) // int as EntityId

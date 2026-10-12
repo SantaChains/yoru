@@ -237,9 +237,31 @@ impl Vm {
         std::mem::take(&mut self.output)
     }
 
+    /// 带模块上下文的值格式化（27 号 A3 / 归并 26 号 D-21）：Variant
+    /// 反查模块 tag 表显示 `Tag名#变体序号`（如 `MyErr#0`），替代此前
+    /// 无身份的 `<variant 0>`。tag 名存于模块字符串表（TagInfo.name 为
+    /// 字符串索引），变体名未入字节码格式（只有载荷标志）——显示到
+    /// tag 名 + 序号 + 载荷已足够定位错误身份；完全恢复变体名需扩
+    /// TagInfo 序列化格式，归入未来需要时再议（27 号 §5.3）。
+    /// 无模块上下文或越界时退回 `<variant N>`（Value::display_with）。
+    pub fn format_value(&self, v: &Value) -> String {
+        match self.module.as_ref() {
+            Some(m) => {
+                let mut resolve = |tag: u32, variant: u32| -> Option<String> {
+                    m.tags
+                        .get(tag as usize)
+                        .and_then(|t| m.strings.get(t.name as usize))
+                        .map(|name| format!("{name}#{variant}"))
+                };
+                v.display_with(&mut resolve)
+            }
+            None => v.display(),
+        }
+    }
+
     /// 输出一行（print 内建与 demo ctx.log 共用；决策 70/73 宿主通道）。
     pub(crate) fn emit_line(&mut self, parts: &[Value]) {
-        let line: Vec<String> = parts.iter().map(Value::display).collect();
+        let line: Vec<String> = parts.iter().map(|v| self.format_value(v)).collect();
         let mut out = line.join(" ");
         out.push('\n');
         self.output.extend_from_slice(out.as_bytes());
@@ -1501,6 +1523,37 @@ mod tests {
     }
 
     // ---- 内建 ----
+
+    // ---- 27 号 A3：format_value tag 表反查（归并 D-21） ----
+
+    #[test]
+    fn format_value_resolves_tag_names() {
+        let src = "tag MyErr = NotFound | Bad(string)\npub fn main() -> MyErr {\n    return Bad(\"x\")\n}\n";
+        let mut vm = Vm::new();
+        let v = vm.run(compile(src), None, vec![]).expect("run");
+        // 载荷沿 display 语义（字符串不带引号，与 print 惯例一致；
+        // repr 变体是已登记的 io.debug 设计债，06 号）。
+        assert_eq!(vm.format_value(&v), "MyErr#1(x)");
+
+        let src2 = "tag MyErr = NotFound | Bad(string)\npub fn main() -> MyErr {\n    return NotFound\n}\n";
+        let mut vm2 = Vm::new();
+        let v2 = vm2.run(compile(src2), None, vec![]).expect("run");
+        assert_eq!(vm2.format_value(&v2), "MyErr#0");
+    }
+
+    #[test]
+    fn raised_error_formats_with_tag_name() {
+        // D-21：throw 传播到顶层的错误值此前显示 `<variant 0>`，无错误身份。
+        let src = "tag MyErr = NotFound\nfn f() -> Result[int, MyErr] {\n    throw NotFound\n}\npub fn main() -> int {\n    return 0\n}\n";
+        let mut vm = Vm::new();
+        // 直接调 f 触发 raise：用 run 内 entry 覆盖（entry 参数指定函数名）。
+        let err = vm.run(compile(src), Some("f"), vec![]).expect_err("raise");
+        match err {
+            VmError::Raised(v) => assert_eq!(vm.format_value(&v), "MyErr#0"),
+            other => panic!("expect Raised, got {other:?}"),
+        }
+    }
+
 
     // ---- 26 号登记修复回归（D-06/07/08/09/17、D-05+20 表示统一）----
 

@@ -170,14 +170,20 @@ fn run(path: &str, host_demo: bool, entry: Option<&str>) -> ExitCode {
             if !out.is_empty() {
                 print!("{out}");
             }
-            let display = v.display();
+            let display = vm.format_value(&v);
             if display != "nil" {
                 println!("= {display}");
             }
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("runtime error: {e}");
+            // Raised 值经模块 tag 表反查身份（27 号 A3）；其余错误走
+            // VmError Display（无模块上下文的 fallback 格式）。
+            if let yoru_vm::VmError::Raised(v) = &e {
+                eprintln!("runtime error: raised: {}", vm.format_value(v));
+            } else {
+                eprintln!("runtime error: {e}");
+            }
             ExitCode::FAILURE
         }
     }
