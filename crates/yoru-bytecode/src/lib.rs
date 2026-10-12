@@ -24,7 +24,7 @@ pub mod module;
 pub mod verify;
 
 pub use instr::{Instr, Opcode};
-pub use lower::{BUILTIN_FNS, lower, lower_with_hosts};
+pub use lower::{lower, lower_with_hosts};
 pub use module::{Const, Lbc0Module, Proto, StructInfo, TagInfo, UpvalueDesc, VERSION};
 pub use verify::{VerifyError, verify_module};
 

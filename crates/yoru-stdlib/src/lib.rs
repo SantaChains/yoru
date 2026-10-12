@@ -178,6 +178,24 @@ pub const BUILTINS: &[Builtin] = &[
         ret: Param::List(&[Param::Var("V")]),
         doc: "Map 值列表（插入序，决策 36）",
     },
+    Builtin {
+        name: "get",
+        module: None,
+        params: &[Param::MapKV("K", "V"), Param::Var("K")],
+        variadic: false,
+        same_numeric: false,
+        ret: Param::Opt(&[Param::Var("V")]),
+        doc: "Map 取键：命中 = 值，缺键 = None（`V?`；27 号 §3.2 strict 取键。`map.get` 拼写与列表 map 函数撞名——决策 77 单一命名空间，故裸名）",
+    },
+    Builtin {
+        name: "get_or",
+        module: None,
+        params: &[Param::MapKV("K", "V"), Param::Var("K"), Param::Var("V")],
+        variadic: false,
+        same_numeric: false,
+        ret: Param::Var("V"),
+        doc: "Map 取键带缺省：命中返回 V，缺键返回第三参缺省值（类型须与 V 一致）",
+    },
     // ---- 数值 ----
     Builtin {
         name: "abs",
@@ -429,6 +447,11 @@ mod tests {
         assert!(module_fn("math", "nope").is_none());
         assert!(module_fn("string", "upper").is_some());
         assert!(module_fn("json", "stringify").is_some());
+        // get/get_or（27 号 §3.2）：裸名两参/三参
+        assert!(select_free("get", 2).is_some() && select_free("get", 3).is_none());
+        assert!(select_free("get_or", 3).is_some() && select_free("get_or", 2).is_none());
+        // map 模块名被列表 map fn 占用（决策 77 单一命名空间）——拼写冲突实证
+        assert!(module_fn("map", "get").is_none());
     }
 
     #[test]

@@ -6,11 +6,13 @@
 ## [Unreleased]
 
 ### Added
+- **`get` / `get_or` 内建（2026-10-13，28 号 R 线，27 号 §3.2 strict 取键）**：`get(m, k)` 命中返回值、缺键返回 None（`V?`），`get_or(m, k, d)` 缺键返回缺省值——缺键处理惯用法断层（get 侧）关闭。`map.get` 拼写与列表 map 函数撞名（决策 77 单一命名空间），按 keys/values 先例取裸名。类型闸实证：`int?` 赋 `int` 编译期拦截、键类型泛型冲突拦截。
 - **`yoru fmt` CLI（2026-10-13，F 线 F2）**：gofmt 风格三形态——默认 stdout（管道组合）、`-w` 原地写入、`--check` 校验（有差异 exit 1，CI 可直接挂）。语义不变性以最强形态验收：examples 11 篇格式化前后 `yoru run` 输出逐位一致（diff 执行结果而非 diff 文本）；解析错误文件诚实拒绝（fmt 只对合法文件负责）。
 - **yoru-fmt crate（2026-10-13，F 线 F1 核心，29 号裁决架构）**：token 空白重写器 + AST 区间指导布局 + span-blind 结构投影打印器 + `verify` 双断言（token 序列保真 + 结构投影保真 + 幂等）。注释/字符串/字面量经 span 逐字节保真；块体逐行缩进、struct_decl 字段与 match 臂逐行、行注释强制行尾、空行保留坍缩。三形态 spike + examples 11 篇全量双断言通过。CLI `yoru fmt` 属 F2。
 - **30 号战略定夺（2026-10-13，文档）**：主轴转工具链（F→R→D→L），语言层只清 Critical 实现债穿插推进；D-03（struct 算术 typeck 放行→VM 崩）定夺 **fail-fast** 方向；新登记 **V 线语义差分测试基建**（cargo-fuzz crash-fuzz + 双模式对拍）。设计文档侧更新，无代码变更。
 
 ### Fixed
+- **lower 内建名单漂移根修（2026-10-13，get/get_or 落地时实证）**：`BUILTIN_FNS` 手写 frozen 镜像（注释声称有 `registry_mirror_locked` 对账测试，实际不存在）与注册表脱节——新增内建裸名调用撞 Y-T0913。改为从 `yoru-stdlib` 注册表派生（LazyLock HashSet，单一事实源构造保证一致），对账测试不再需要。
 - **嵌套 lambda 祖父捕获崩溃（2026-10-13，D-24 Critical 根修）**：内层 lambda 捕获非直接父级的变量不再报 `Y-I9004`——根因是 `lower_lambda` 以 clone 继承捕获层，内层经 resolve_capture 登记进中间层的传递 upvalue 条目随克隆体在恢复外层状态时丢失（中间层 `proto.upvalues` 落空）；改 move 语义后穿透捕获正确。for 循环变量作祖父捕获时每轮按值快照（决策 31）。回归测试 +2，examples 11/11，全仓 160 测试全绿。
 - **parser `FnDecl.span` 从 `fn` 关键字起**（2026-10-13，F1 配套 API 缺口修正）：此前从函数名起，与 `ProtocolFn`（从 `fn` 起）不一致；诊断定位顺带覆盖签名头。全量测试回归通过。
 - **决策 83（2026-10-12，F 线 formatter 前置 F0）**：注释进入词法流——`//`/`/* */`/`///` 全部词法可见（此前普通注释被静默丢弃，examples 70+ 行注释词法不可见）；换行延续判定对注释**穿透**，行尾注释不再截断延续表达式（`a + // c\nb` 与 `a + /// doc\nb` 此后者为既有潜伏解析错误，现正确求值）。注释文本经 span 逐字保留，为 `yoru fmt`（F1）与 LSP hover 提供地基。138 测试全绿。

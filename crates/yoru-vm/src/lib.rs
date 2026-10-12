@@ -1500,6 +1500,39 @@ mod tests {
         assert_eq!(t, 6);
     }
 
+    // R 线收尾（27 号 §3.2 strict 取键）：get/get_or 命中、缺键、缺省三面。
+    #[test]
+    fn map_get_hit_and_miss() {
+        let v = run_src(
+            "pub fn main() -> int? {\n    let m = [\"a\": 1, \"b\": 2]\n    let miss = get(m, \"z\")\n    if miss == nil {\n        return get(m, \"b\")\n    }\n    return miss\n}\n",
+        )
+        .expect("run");
+        let Value::Int(t) = v else { panic!("int") };
+        assert_eq!(t, 2); // 缺键走 nil 分支，命中返回 2
+    }
+
+    #[test]
+    fn map_get_or_default() {
+        let v = run_src(
+            "pub fn main() -> int {\n    let m = [\"a\": 1]\n    return get_or(m, \"a\", 99) * 100 + get_or(m, \"zz\", 99)\n}\n",
+        )
+        .expect("run");
+        let Value::Int(t) = v else { panic!("int") };
+        assert_eq!(t, 199);
+    }
+
+    /// 类型闸（决策 55/27 §3.2）：`V?` 不得赋给裸 `V`——fail-soft 毒化在编译期拦。
+    #[test]
+    fn map_get_option_type_gate() {
+        let src = "pub fn main() -> int {\n    let m = [\"a\": 1]\n    let x: int = get(m, \"a\")\n    return x\n}\n";
+        let (diags, ok) = yoru_typeck::check_source(src, &yoru_typeck::Env::core());
+        assert!(!ok, "int? must not assign to int");
+        assert!(
+            diags.iter().any(|d| d.is_error() && d.message.contains("int?")),
+            "expect int? mismatch diagnostic, got {diags:?}"
+        );
+    }
+
     #[test]
     fn match_and_try_propagation() {
         let v = run_src(

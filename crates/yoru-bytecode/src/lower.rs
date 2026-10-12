@@ -17,6 +17,7 @@
 //! - 变体构造/测试不带类型标签（VM 阶段 3 按类型标签校验）。
 
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 use yoru_syntax::ast;
 use yoru_syntax::ast::StrItem;
@@ -31,39 +32,16 @@ const CONVERT_INT: u32 = 0;
 const CONVERT_FLOAT: u32 = 1;
 const CONVERT_RUNE: u32 = 2;
 
-/// 内建自由函数名单（决策 25：stdlib 数据第一参数；bare 名直接解析到 std 槽）。
-/// 调用约定（阶段 3 定稿）：内建以 `Const(Str(名字))` 为 callee——VM 按名字分派内建注册表，
-/// 裸名作为值传递（如 `map(xs, len)`）时同为 Str 值，调用期统一解析。
-///
-/// **决策 77**：签名面的单一事实源在 `yoru_stdlib::BUILTINS` 注册表；本名单是
-/// 其 frozen 镜像，由 `registry_mirror_locked` 对账测试锁定一致（含 print/
-/// assert——自决策 77 起为核内内建，VM 原生实现）。模块限定调用（`string.to_runes`）
-/// 在 lower 归一为同一 bare 名（见 `module_builtin_ref`）。
-pub const BUILTIN_FNS: &[&str] = &[
-    "len",
-    "map",
-    "filter",
-    "fold",
-    "sort",
-    "sort_floats",
-    "keys",
-    "values",
-    "abs",
-    "min",
-    "max",
-    "to_runes",
-    "parse_int",
-    "parse_float",
-    "print",
-    "range",
-    "assert",
-    "sqrt",
-    "floor",
-    "ceil",
-    "upper",
-    "parse",
-    "stringify",
-];
+/// 内建自由函数名集合——**从 `yoru-stdlib` 注册表派生（决策 77 单一事实源）**，
+/// 构造保证与 typeck/VM 两侧一致。此前为手写 frozen 镜像（注释声称有
+/// `registry_mirror_locked` 对账测试，实际不存在）：注册表新增 `get`/`get_or`
+/// 后名单未同步，裸名调用撞 Y-T0913——漂移实证后根修为派生式。
+/// 调用约定（阶段 3 定稿）：内建以 `Const(Str(名字))` 为 callee——VM 按名字
+/// 分派内建注册表，裸名作为值传递（如 `map(xs, len)`）时同为 Str 值，调用期
+/// 统一解析。模块限定调用（`string.to_runes`）在 lower 归一为同一 bare 名
+/// （见 `module_builtin_ref`）。
+static BUILTIN_FNS: LazyLock<HashSet<&'static str>> =
+    LazyLock::new(|| yoru_stdlib::builtin_names().into_iter().collect());
 
 /// lowering 入口。lowerer 对 AST 的递归与大栈线程配合（同 parse_source 注记：
 /// Windows 主线程栈仅 1MB，16MB 大栈 + 深度闸双保险）。
@@ -952,7 +930,7 @@ impl Lowerer {
         }
         // 7. 内建自由函数（决策 25）：以 `Const(Str(名字))` 为 callee——VM 调用期按名
         //    分派内建注册表；裸名作值传递（`map(xs, len)`）亦为同一 Str 值，语义一致。
-        if BUILTIN_FNS.contains(&name) {
+        if BUILTIN_FNS.contains(name) {
             self.emit_builtin_name(name);
             return;
         }

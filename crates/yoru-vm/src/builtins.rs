@@ -1,8 +1,8 @@
 //! 内建注册表（阶段 3 最小切片）：以 `Const(Str(名))` 为 callee 的调用约定分派。
 //!
 //! 覆盖 yoru-stdlib 注册表全名单（决策 77）：len/map/filter/fold/sort/sort_floats/keys/
-//! values/abs/min/max/to_runes/parse_int/parse_float/print/range/assert + 模块内建
-//! sqrt/floor/ceil/upper/parse/stringify（此前 math.floor/ceil 有 typeck 面而无
+//! values/get/get_or/abs/min/max/to_runes/parse_int/parse_float/print/range/assert +
+//! 模块内建 sqrt/floor/ceil/upper/parse/stringify（此前 math.floor/ceil 有 typeck 面而无
 //! 运行时实现、string.upper 仅 demo 宿主有——注册表统一收口后 VM 全责实现）。
 //! print 写入 Vm 输出缓冲（宿主经 take_output 取走，决策 70：print 走宿主通道）。
 //! **对账**：`registry_dispatch_reconciled` 测试断言注册表每个名字都有分派臂。
@@ -130,6 +130,29 @@ impl Vm {
                     .collect();
                 self.alloc(items.len() as i64 * 16 + 32)?;
                 Ok(Value::List(Rc::new(RefCell::new(items))))
+            }
+            "get" | "get_or" => {
+                // map.get(m,k) / map.get_or(m,k,d)（27 号 §3.2 strict 取键）：
+                // 命中返回 V；缺键 get → None（运行期 = Nil，T? = Nil|T 统一表示），
+                // get_or → 第三参缺省。typeck 面第三参与 V unify（无隐式转换）。
+                let v = arg(args, 0, name)?;
+                let Value::Map(m) = &v else {
+                    return Err(self.builtin_err(name, format!("{name} expects map")));
+                };
+                let k = arg(args, 1, name)?.clone();
+                let found = m
+                    .borrow()
+                    .iter()
+                    .find(|(mk, _)| *mk == k)
+                    .map(|(_, val)| val.clone());
+                match found {
+                    Some(val) => Ok(val),
+                    None if name == "get" => Ok(Value::Nil),
+                    None => {
+                        let d = arg(args, 2, name)?.clone();
+                        Ok(d)
+                    }
+                }
             }
             "map" | "filter" => {
                 let coll = arg(args, 0, name)?.resolve_iterable()?;
