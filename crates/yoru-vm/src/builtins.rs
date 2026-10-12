@@ -74,20 +74,14 @@ impl Vm {
                 let Value::Str(s) = &v else {
                     return Err(self.builtin_err(name, "parse_int expects string"));
                 };
-                Ok(mk_option(
-                    self.option_tag,
-                    s.trim().parse::<i64>().ok().map(Value::Int),
-                ))
+                Ok(mk_option(s.trim().parse::<i64>().ok().map(Value::Int)))
             }
             "parse_float" => {
                 let v = arg(args, 0, name)?;
                 let Value::Str(s) = &v else {
                     return Err(self.builtin_err(name, "parse_float expects string"));
                 };
-                Ok(mk_option(
-                    self.option_tag,
-                    s.trim().parse::<f64>().ok().map(Value::Float),
-                ))
+                Ok(mk_option(s.trim().parse::<f64>().ok().map(Value::Float)))
             }
             "to_runes" => {
                 let v = arg(args, 0, name)?;
@@ -332,7 +326,7 @@ impl Vm {
 /// 值在运行期仍是 Variant：算术透传侥幸正确，但 display/Ok 构造/返回值泄漏
 /// `<variant N>`（D-20 Critical 静默错值）。spec 19 无 Some/None 模式匹配承诺，
 /// 表示统一无观测破坏面。
-pub fn mk_option(_option_tag: Option<u32>, v: Option<Value>) -> Value {
+pub fn mk_option(v: Option<Value>) -> Value {
     match v {
         Some(v) => v,
         None => Value::Nil,

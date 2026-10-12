@@ -100,7 +100,6 @@ pub struct Instance {
     imports: Vec<Value>,
     /// Result/Option tag 序号（按 tag 名解析；prelude 恒在）
     result_tag: Option<u32>,
-    option_tag: Option<u32>,
     /// 字符串序号 → 全局字段名序号（GETFIELD/SETFIELD/NEWSTRUCT 对齐）
     fid_of_str: HashMap<u32, u32>,
 }
@@ -109,7 +108,6 @@ impl Instance {
     pub fn new(module: Lbc0Module) -> Instance {
         let module = Rc::new(module);
         let result_tag = Self::find_tag(&module, "Result");
-        let option_tag = Self::find_tag(&module, "Option");
         let mut fid_of_str = HashMap::new();
         for (i, &sidx) in module.field_names.iter().enumerate() {
             fid_of_str.insert(sidx, i as u32);
@@ -119,7 +117,6 @@ impl Instance {
             module,
             imports,
             result_tag,
-            option_tag,
             fid_of_str,
         }
     }
@@ -170,7 +167,6 @@ pub struct Vm {
     /// 内建未命中后按名分派（决策 76：与内建同构的调用约定）。
     host_fns: HashMap<String, HostFn>,
     result_tag: Option<u32>,
-    option_tag: Option<u32>,
     fid_of_str: HashMap<u32, u32>,
     debug: DebugInfo,
     // ---- 执行状态 ----
@@ -204,7 +200,6 @@ impl Vm {
             imports: Vec::new(),
             host_fns: HashMap::new(),
             result_tag: None,
-            option_tag: None,
             fid_of_str: HashMap::new(),
             debug: DebugInfo::default(),
             frames: Vec::new(),
@@ -383,7 +378,6 @@ impl Vm {
         self.module = Some(inst.module.clone());
         self.imports = inst.imports;
         self.result_tag = inst.result_tag;
-        self.option_tag = inst.option_tag;
         self.fid_of_str = inst.fid_of_str;
         self.debug = DebugInfo::from_module(&inst.module).unwrap_or_default();
         self.frames.clear();
@@ -983,12 +977,10 @@ impl Vm {
             // ---- Option/Result/错误 ----
             Opcode::IsNone => {
                 let v = self.pop();
-                let none = match &v {
-                    Value::Nil => true,
-                    Value::Variant(var) => Some(var.tag) == self.option_tag && var.variant == 0,
-                    _ => false,
-                };
-                self.push(Value::Bool(none));
+                // Option 运行期表示唯一 = Nil | T（D-05/D-20 修复后 mk_option
+                // 恒产 Nil）——None 判定即 Nil。旧 Variant 臂（option_tag &&
+                // variant==0）为表示统一前的残留死代码，决策 82 清理。
+                self.push(Value::Bool(matches!(v, Value::Nil)));
             }
             Opcode::Unwrap => {
                 let v = self.pop();
@@ -1525,6 +1517,27 @@ mod tests {
     // ---- 内建 ----
 
     // ---- 27 号 A3：format_value tag 表反查（归并 D-21） ----
+
+    #[test]
+    fn map_for_iter_yields_keys_vm() {
+        // 决策 82 第一步：VM Cursor::Map 产出键快照（决策 31 同构）。
+        let v = run_src(
+            "pub fn main() -> int {\n    let mut m: [string: int] = [:]\n    m[\"b\"] = 2\n    m[\"a\"] = 1\n    let acc: string = \"\"\n    for k in m {\n        acc = acc + k\n    }\n    return len(acc)\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(2)); // 两键各拼一次 → len 2（插入序 b,a）
+    }
+
+    #[test]
+    fn opt_elem_list_lit_vm() {
+        // [T?] 标注下 nil 元素运行期为 Nil（None）。
+        let v = run_src(
+            "pub fn main() -> int? {\n    let xs: [int?] = [1, nil]\n    return xs[1]\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Nil);
+    }
+
 
     #[test]
     fn format_value_resolves_tag_names() {

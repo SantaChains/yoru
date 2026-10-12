@@ -95,6 +95,29 @@ mod tests {
     // ===== 决策 26：int/float 严格 as =====
 
     #[test]
+    fn opt_elem_list_lit_with_annotation() {
+        // 决策 82：上下文期望 [T?] 时 nil 元素经 Ty::Nil 反向入口通过。
+        let ok = errors(
+            "fn main() -> int {\n    let xs: [int?] = [1, nil]\n    print(xs[0])\n    return 0\n}\n",
+        );
+        assert!(ok.is_empty(), "标注 [int?] 的 [1, nil] 不应报错: {ok:#?}");
+        // 无标注仍拒绝（元素类型无法统一推断）。
+        let bad = errors("fn main() -> int {\n    let ys = [1, nil]\n    return 0\n}\n");
+        assert!(!bad.is_empty(), "无标注 [1, nil] 应报错");
+    }
+
+    #[test]
+    fn map_for_iter_yields_keys() {
+        // 决策 82 第一步：Map 迭代产出键（对齐 VM Cursor::Map 既有语义）。
+        let ok = errors(
+            "fn main() -> int {\n    let mut m: [string: int] = [:]\n    m[\"a\"] = 1\n    let n = 0\n    for k in m {\n        print(k)\n    }\n    return n\n}\n",
+        );
+        assert!(ok.is_empty(), "for k in map 不应报错: {ok:#?}");
+        let bad = errors("fn main() -> int {\n    for x in 5 {\n        print(x)\n    }\n    return 0\n}\n");
+        assert_eq!(codes(&bad), vec!["Y-T0002"], "{bad:#?}");
+    }
+
+    #[test]
     fn rune_int_as_roundtrip_allowed() {
         // 决策 81（27 号 A4 裁决方案①）：rune = distinct int 内建等价，
         // distinct 往返在决策 26 as 许可范围；lower CONVERT_RUNE / VM 码点

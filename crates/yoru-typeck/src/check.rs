@@ -636,16 +636,21 @@ impl<'e> Checker<'e> {
                     Ty::List(t) => (**t).clone(),
                     Ty::Str => Ty::Rune,  // 决策 46：按码点迭代
                     Ty::Range => Ty::Int, // 决策 77：range 产物迭代为 int（VM ForPrep 同构）
+                    // 决策 82 第一步：Map 迭代产出**键**（VM Cursor::Map 既有语义，
+                    // 键快照按值决策 31——迭代中变异不影响进行中的迭代）。
+                    // KV(.key/.value) 完整履约依赖泛型实例化管线，随泛型批次
+                    // （26 号排期）；届时 `for kv in m` 换语义为产出 entry。
+                    Ty::Map(k, _) => (**k).clone(),
                     other => {
                         let s = iter.span;
                         self.err(
                             d(
                                 "Y-T0002",
                                 Severity::Error,
-                                format!("for 只能迭代 list/string，得到 `{other}`"),
+                                format!("for 只能迭代 list/string/map/range，得到 `{other}`"),
                                 s,
                             )
-                            .with_suggestion("Map 迭代在阶段 2 提供 keys/values 通道"),
+                            .with_suggestion("Map 迭代产出键；键值对经 `m[k]` 或未来 KV entry（决策 82）"),
                         );
                         Ty::Unit
                     }
@@ -1242,10 +1247,25 @@ impl<'e> Checker<'e> {
                         }
                     };
                 }
-                let elem = self.check_expr(&items[0], None);
+                // 元素类型：上下文期望 [T?]（等标注）时以其驱动——元素经
+                // assignable（Nil→T?、T→T? 兼容）判定；无标注时按首元素推导。
+                // 泛型模式位（Ty::Generic，如 map 的 [T] 参数）不吃 expected——
+                // 首元素反推正是 T 的绑定来源。
+                let elem = match expected {
+                    Some(Ty::List(t)) if !matches!(**t, Ty::Generic(_)) => {
+                        let et = (**t).clone();
+                        let t0 = self.check_expr(&items[0], Some(&et));
+                        if !self.assignable(&t0, &et) {
+                            let s = items[0].span;
+                            self.err(self.mismatch(et.clone(), t0, s));
+                        }
+                        et
+                    }
+                    _ => self.check_expr(&items[0], None),
+                };
                 for item in &items[1..] {
                     let t = self.check_expr(item, Some(&elem));
-                    if !t.same(&elem) {
+                    if !self.assignable(&t, &elem) {
                         let s = item.span;
                         self.err(self.mismatch(elem.clone(), t, s));
                     }
@@ -1270,17 +1290,39 @@ impl<'e> Checker<'e> {
                         }
                     };
                 }
-                let (k0, v0) = &items[0];
-                let kt = self.check_expr(k0, None);
-                let vt = self.check_expr(v0, None);
+                // 与 List 同构：上下文期望 [K: V?] 时以标注驱动键值类型，
+                // 元素经 assignable 判定（nil 值 → T? 通过，决策 82）。
+                let (kt, vt) = match expected {
+                    Some(Ty::Map(k, v))
+                        if !matches!(**k, Ty::Generic(_)) && !matches!(**v, Ty::Generic(_)) =>
+                    {
+                        let (kt, vt) = ((**k).clone(), (**v).clone());
+                        let (k0, v0) = &items[0];
+                        let kt0 = self.check_expr(k0, Some(&kt));
+                        if !self.assignable(&kt0, &kt) {
+                            let s = k0.span;
+                            self.err(self.mismatch(kt.clone(), kt0, s));
+                        }
+                        let vt0 = self.check_expr(v0, Some(&vt));
+                        if !self.assignable(&vt0, &vt) {
+                            let s = v0.span;
+                            self.err(self.mismatch(vt.clone(), vt0, s));
+                        }
+                        (kt, vt)
+                    }
+                    _ => {
+                        let (k0, v0) = &items[0];
+                        (self.check_expr(k0, None), self.check_expr(v0, None))
+                    }
+                };
                 for (k, v) in &items[1..] {
                     let kti = self.check_expr(k, Some(&kt));
-                    if !kti.same(&kt) {
+                    if !self.assignable(&kti, &kt) {
                         let s = k.span;
                         self.err(self.mismatch(kt.clone(), kti, s));
                     }
                     let vti = self.check_expr(v, Some(&vt));
-                    if !vti.same(&vt) {
+                    if !self.assignable(&vti, &vt) {
                         let s = v.span;
                         self.err(self.mismatch(vt.clone(), vti, s));
                     }
