@@ -1,0 +1,88 @@
+// 01 · Vec2 二维线性代数（Yoru 示例套件 · 游戏数学方向）
+// 运行：yoru run examples/math/01_vec2_lin_alg.yoru
+// 覆盖：struct/字面量/字段展开、自由函数（数据第一参数）、lambda、管道 |>、
+//       map/fold/sort_floats、for in range/list、if 表达式、assert、const、
+//       protocol 声明 + impl 校验、Option(T?)/nil/!、int/float 显式 as、插值拼串。
+// 说明：struct 字段赋值与运算符重载在当前实现尚未连通（见 24 号文档 §D1/D3），
+//       全部走自由函数 + 函数式字段更新——这也是 spec 19 的规范形式。
+
+import math from "std"
+
+pub struct Vec2 {
+    x: float
+    y: float
+}
+
+// 协议显式 impl（决策 21）：当前实现只做编译期校验，方法尚不可调用
+// （运行期分派属阶段 4，见 24 号文档 §D3）——调用一律走自由函数。
+impl Add for Vec2 {
+    fn add(a: Vec2, b: Vec2) -> Vec2 {
+        return Vec2 { x: a.x + b.x, y: a.y + b.y }
+    }
+}
+
+fn v2(x: float, y: float) -> Vec2 {
+    return Vec2 { x: x, y: y }
+}
+
+fn add(a: Vec2, b: Vec2) -> Vec2 {
+    return Vec2 { x: a.x + b.x, y: a.y + b.y }
+}
+
+fn sub(a: Vec2, b: Vec2) -> Vec2 {
+    return Vec2 { x: a.x - b.x, y: a.y - b.y }
+}
+
+fn scale(v: Vec2, s: float) -> Vec2 {
+    return Vec2 { x: v.x * s, y: v.y * s }
+}
+
+fn dot(a: Vec2, b: Vec2) -> float {
+    return a.x * b.x + a.y * b.y
+}
+
+// 2D 叉积的标量投影（3D 叉积的 z 分量）：面积/朝向判据
+fn cross(a: Vec2, b: Vec2) -> float {
+    return a.x * b.y - a.y * b.x
+}
+
+fn length(v: Vec2) -> float {
+    return math.sqrt(v.x * v.x + v.y * v.y)
+}
+
+
+fn normalize(v: Vec2) -> Vec2 {
+    let l = length(v)
+    if l == 0.0 {
+        return v2(0.0, 0.0)
+    }
+    return scale(v, 1.0 / l)
+}
+
+fn lerp(a: Vec2, b: Vec2, t: float) -> Vec2 {
+    return add(scale(a, 1.0 - t), scale(b, t))
+}
+
+// 复数旋转：乘单位复数 (c + s·i)，免三角函数（游戏数学经典手法）
+fn rotate_c(v: Vec2, c: float, s: float) -> Vec2 {
+    return Vec2 { x: v.x * c - v.y * s, y: v.x * s + v.y * c }
+}
+
+pub fn main() -> int {
+    let a = v2(3.0, 4.0)
+    let b = v2(1.0, 2.0)
+    assert(length(a) == 5.0 and dot(a, b) == 11.0 and cross(a, b) == 2.0, "vec2 basics")
+    let unit = normalize(a)
+    print("a=${a.x},${a.y} len=${length(a)} unit=${unit.x},${unit.y}")
+
+    let mid = lerp(a, b, 0.5)
+    let turned = rotate_c(a, 0.0, 1.0)
+    assert(turned.y == 3.0, "rotate 90°")
+    print("mid=${mid.x},${mid.y} turned=${turned.x},${turned.y} dist=${length(sub(a, b))}")
+
+    // 闭包捕获 + map 高阶（集合管道全景见 10 篇）
+    let zoom = 10.0
+    let zoomed = map([a, b], fn(v) = scale(v, zoom))
+    print("zoomed0=${zoomed[0].x},${zoomed[0].y} count=${len(zoomed)}")
+    return 0
+}

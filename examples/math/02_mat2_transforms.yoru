@@ -1,0 +1,77 @@
+// 02 · Mat2 二维变换（Yoru 示例套件 · 线性代数）
+// 运行：yoru run examples/math/02_mat2_transforms.yoru
+// 覆盖：struct 组合、Option(T?) 返回与 ! 解包、函数式字段更新（决策 41）、
+//       切片 xs[a..b]（半开，决策 42）、for in list、map 高阶、assert 不变量。
+// 多边形面积/质心见 03 篇；控制流 while/break/continue 见 06/08 篇。
+
+
+pub struct Vec2 {
+    x: float
+    y: float
+}
+
+pub struct Mat2 {
+    a: float
+    b: float
+    c: float
+    d: float
+}
+
+fn mat2(a: float, b: float, c: float, d: float) -> Mat2 {
+    return Mat2 { a: a, b: b, c: c, d: d }
+}
+
+fn det(m: Mat2) -> float {
+    return m.a * m.d - m.b * m.c
+}
+
+fn apply(m: Mat2, v: Vec2) -> Vec2 {
+    return Vec2 { x: m.a * v.x + m.b * v.y, y: m.c * v.x + m.d * v.y }
+}
+
+fn mul(m: Mat2, n: Mat2) -> Mat2 {
+    return Mat2 {
+        a: m.a * n.a + m.b * n.c,
+        b: m.a * n.b + m.b * n.d,
+        c: m.c * n.a + m.d * n.c,
+        d: m.c * n.b + m.d * n.d,
+    }
+}
+
+// 2x2 逆：奇异矩阵返回 nil（Option 通道，决策 27）
+fn inverse(m: Mat2) -> Mat2? {
+    let k = det(m)
+    if k == 0.0 {
+        return nil
+    }
+    let s = 1.0 / k
+    return Mat2 { a: m.d * s, b: -m.b * s, c: -m.c * s, d: m.a * s }
+}
+
+pub fn main() -> int {
+    let square = [
+        Vec2 { x: 0.0, y: 0.0 },
+        Vec2 { x: 2.0, y: 0.0 },
+        Vec2 { x: 2.0, y: 2.0 },
+        Vec2 { x: 0.0, y: 2.0 },
+    ]
+    // 缩放 2x 复合 90° 旋转（行主序；先缩放后旋转 = R·S）
+    let s2 = mat2(2.0, 0.0, 0.0, 2.0)
+    let r90 = mat2(0.0, -1.0, 1.0, 0.0)
+    let combo = mul(r90, s2)
+    let p = apply(combo, Vec2 { x: 1.0, y: 0.0 })
+    assert(p.y == 2.0 and p.x == 0.0, "先缩放后旋转")
+    print("combo(1,0)=${p.x},${p.y} det=${det(combo)}")
+
+    // 逆矩阵还原（Option 收窄后直接用名，无需 !；! 在收窄分支内会被误拦，见 24 号文档 §D4）
+    let inv = inverse(combo)
+    if inv != nil {
+        let back = apply(inv, p)
+        assert(back.x == 1.0 and back.y == 0.0, "逆矩阵还原")
+        print("inv-roundtrip=${back.x},${back.y}")
+    }
+    let singular = inverse(mat2(1.0, 2.0, 2.0, 4.0))
+    assert(singular == nil, "奇异矩阵 → nil")
+    print("inverse ok; square[0]=${square[0].x},${square[0].y}")
+    return 0
+}

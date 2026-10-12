@@ -1,0 +1,83 @@
+// 03 · 多边形几何（Yoru 示例套件 · 计算几何）
+// 运行：yoru run examples/math/03_polygon.yoru
+// 覆盖：while + floor-mod 环形索引（决策 44）、map 变换、函数式字段更新（决策 41）、
+//       切片 xs[a..b]（决策 42）、for in list、Option 收窄后直接用名
+//       （! 在收窄分支内会被误拦，见 24 号文档 §D4）。
+
+import math from "std"
+
+pub struct Vec2 {
+    x: float
+    y: float
+}
+
+fn cross(a: Vec2, b: Vec2) -> float {
+    return a.x * b.y - a.y * b.x
+}
+
+// 鞋带公式：有向面积（取绝对值）
+fn area(pts: [Vec2]) -> float {
+    let n = len(pts)
+    let mut acc = 0.0
+    let mut i = 0
+    while i < n {
+        acc += cross(pts[i], pts[(i + 1) % n])
+        i += 1
+    }
+    return 0.5 * math.abs(acc)
+}
+
+// 质心（面积加权平均）
+fn centroid(pts: [Vec2]) -> Vec2 {
+    let n = len(pts)
+    let mut cx = 0.0
+    let mut cy = 0.0
+    let mut a2 = 0.0
+    let mut i = 0
+    while i < n {
+        let p = pts[i]
+        let q = pts[(i + 1) % n]
+        let w = cross(p, q)
+        a2 += w
+        cx += (p.x + q.x) * w
+        cy += (p.y + q.y) * w
+        i += 1
+    }
+    let k = 1.0 / (3.0 * a2)
+    return Vec2 { x: cx * k, y: cy * k }
+}
+
+// 构造器收进函数：main 里的字面量只写一次，省下的解析预算留给演示
+fn tri_345() -> [Vec2] {
+    return [
+        Vec2 { x: 0.0, y: 0.0 },
+        Vec2 { x: 4.0, y: 0.0 },
+        Vec2 { x: 0.0, y: 3.0 },
+    ]
+}
+
+pub fn main() -> int {
+    let tri = tri_345()
+    assert(area(tri) == 6.0, "3-4-5 三角形面积")
+    let c = centroid(tri)
+    print("tri area=${area(tri)} centroid=${c.x},${c.y}")
+
+    // 函数式字段更新（决策 41）：平移整个多边形（原表不动）
+    let shifted = map(tri, fn(p) = Vec2 { ..p, x: p.x + 10.0 })
+    assert(area(shifted) == 6.0, "平移保面积")
+    print("shifted area=${area(shifted)} first=${shifted[0].x},${shifted[0].y}")
+
+    // 切片（半开，决策 42）：取多边形的边 + for in list
+    let edge = tri[1..3]
+    print("edge:")
+    for v in edge {
+        print("  ${v.x},${v.y}")
+    }
+
+    // Option 安全用法：! 断言解包（nil 即抛错）；收窄分支内的名是运行期
+    // Variant，且 ! 在分支内被误拦——当前务必在分支外解包，见 24 号文档 §D4/D5
+    let maybe = parse_float("2.5")
+    let m = maybe!
+    print("parsed=${m}")
+    return 0
+}

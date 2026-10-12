@@ -1,0 +1,73 @@
+// 04 · 三角函数 Taylor 逼近（Yoru 示例套件 · 高性能数值）
+// 运行：yoru run examples/math/04_trig_approx.yoru
+// 覆盖：const 编译期折叠、四分之一周期约减 + 象限查表 + Horner 泰勒级数、
+//       float 运算、精度断言（|err| < 1e-9）、while 基准循环。
+// 手法：游戏数学经典的 range reduction + Taylor——std 无 sin/cos 内建，
+//       纯脚本实现，验证 Yoru 数值核心的表达能力与精度。
+
+const PI: float = 3.141592653589793
+const HALF_PI: float = 1.5707963267948966
+const TAU: float = 6.283185307179586
+
+import math from "std"
+
+// sin 的 6 项 Horner：|t| ≤ π/4 时截断误差 ~7e-12
+fn tsin(t: float) -> float {
+    let u = t * t
+    return t * (1.0 - u / 6.0 * (1.0 - u / 20.0 * (1.0 - u / 42.0 * (1.0 - u / 72.0 * (1.0 - u / 110.0)))))
+}
+
+// cos 的 9 项 Horner：|t| ≤ π/4 时截断误差 ~6e-11
+fn tcos(t: float) -> float {
+    let u = t * t
+    return 1.0 - u / 2.0 * (1.0 - u / 12.0 * (1.0 - u / 30.0 * (1.0 - u / 56.0 * (1.0 - u / 90.0 * (1.0 - u / 132.0 * (1.0 - u / 182.0))))))
+}
+
+// 四分之一周期约减：k = round(x / (π/2))，r ∈ [-π/4, π/4]，
+// 按 k mod 4 查象限（floor-mod 恒非负，决策 44）
+fn sin(x: float) -> float {
+    let k = math.floor(x / HALF_PI + 0.5)
+    let r = x - k as float * HALF_PI
+    let m = k % 4
+    if m == 0 {
+        return tsin(r)
+    }
+    if m == 1 {
+        return tcos(r)
+    }
+    if m == 2 {
+        return -tsin(r)
+    }
+    return -tcos(r)
+}
+
+// cos(x) = sin(x + π/2)：复用同一约减 machinery
+fn cos(x: float) -> float {
+    return sin(x + HALF_PI)
+}
+
+pub fn main() -> int {
+    // 精度验证：与 f64 字面量参考值比对
+    assert(abs(sin(PI / 2.0) - 1.0) < 1.0e-9, "sin π/2 = 1")
+    assert(abs(sin(PI)) < 1.0e-9, "sin π = 0")
+    assert(abs(cos(PI) + 1.0) < 1.0e-9, "cos π = -1")
+    assert(abs(sin(PI / 6.0) - 0.5) < 1.0e-9, "sin π/6 = 1/2")
+    assert(abs(sin(PI / 4.0) - 0.7071067811865476) < 1.0e-9, "sin π/4")
+    print("sin(pi/6)=${sin(PI / 6.0)} cos(pi/3)=${cos(PI / 3.0)}")
+
+    // 大角度约减：100 圈后依旧收敛到同一值（约减的数值稳定性）
+    let far = sin(100.0 * TAU + PI / 2.0)
+    assert(abs(far - 1.0) < 1.0e-9, "100 圈约减")
+    print("sin(100tau+pi/2)=${far}")
+
+    // 基准：65536 次求和的吞吐演示（在 VM 指令预算内）
+    let n = 65536
+    let mut acc = 0.0
+    let mut i = 0
+    while i < n {
+        acc += sin(i as float * 0.001)
+        i += 1
+    }
+    print("bench sum(65536 sin)=${acc}")
+    return 0
+}

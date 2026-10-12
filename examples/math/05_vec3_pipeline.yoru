@@ -1,0 +1,59 @@
+// 05 · Vec3 三维变换管线（Yoru 示例套件 · 计算机图形学）
+// 运行：yoru run examples/math/05_vec3_pipeline.yoru
+// 覆盖：struct Vec3 + 字段访问、(c, s) 参数对旋转（游戏引擎经典手法：
+//       调用方预计算或查表 cos/sin，语言无需内建三角函数）、RH 透视投影
+//       直接公式（f = 1/tan(fov/2)）、非线性深度映射 [near,far] → [-1,1]、
+//       齐次除法 → NDC、for in list、字符串插值、自由函数组合。
+// 管线：Ry(0.6, 0.8)（53.13°，3-4-5 三角形的角）→ T(0,0,-5) → perspective
+//       → NDC。模型平移是纯 z 的，故折进投影的 d = -(z + tz)，数学严格等价。
+// 输出已人工验算（8 顶点 |ndc| < 1，深度随视距单调）。
+// 注：4×4 矩阵字面量在 Y-S9502 全局包装预算下放不下（16 元素 ≈ 210 wraps，
+//       详见 24 号文档 D-01），本篇用直接公式讲同一套数学；2×2 矩阵乘见
+//       02 篇、三角函数逼近见 04 篇。
+
+pub struct Vec3 {
+    x: float
+    y: float
+    z: float
+}
+
+// 绕 Y 轴旋转（RH，列向量约定）：(1,0,0) → (c, 0, -s)
+fn rotate_y(c: float, s: float, v: Vec3) -> Vec3 {
+    return Vec3 { x: c * v.x + s * v.z, y: v.y, z: c * v.z - s * v.x }
+}
+
+// RH 透视深度映射：d = -z_view > 0，[near, far] → [-1, 1]（GL 惯例）
+fn depth(d: float, near: float, far: float) -> float {
+    return ((far + near) * d - 2.0 * far * near) / ((far - near) * d)
+}
+
+// 透视投影直接公式（fov 60° → f = 1.7320508）：
+// x' = f·x/d, y' = f·y/d, depth 非线性映射；tz 为模型平移（纯 z）
+fn project(f: float, near: float, far: float, tz: float, v: Vec3) -> [float] {
+    let d = 0.0 - (v.z + tz)
+    return [f * v.x / d, f * v.y / d, depth(d, near, far)]
+}
+
+// 单位立方体 8 顶点（近面 z=-1；构造器 fn 收字面量省解析预算，同 03 篇手法）
+fn cube() -> [Vec3] {
+    return [
+        Vec3 { x: -1.0, y: -1.0, z: -1.0 },
+        Vec3 { x: 1.0, y: -1.0, z: -1.0 },
+        Vec3 { x: 1.0, y: 1.0, z: -1.0 },
+        Vec3 { x: -1.0, y: 1.0, z: -1.0 },
+        Vec3 { x: -1.0, y: -1.0, z: 1.0 },
+        Vec3 { x: 1.0, y: -1.0, z: 1.0 },
+        Vec3 { x: 1.0, y: 1.0, z: 1.0 },
+        Vec3 { x: -1.0, y: 1.0, z: 1.0 },
+    ]
+}
+
+pub fn main() -> int {
+    print("ndc (x, y, depth):")
+    for v in cube() {
+        let rv = rotate_y(0.6, 0.8, v)
+        let ndc = project(1.7320508, 0.1, 100.0, -5.0, rv)
+        print("  ${ndc[0]}, ${ndc[1]}, ${ndc[2]}")
+    }
+    return 0
+}

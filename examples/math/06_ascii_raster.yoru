@@ -1,0 +1,52 @@
+// 06 · 距离场 ASCII 光栅器（Yoru 示例套件 · 计算机图形学）
+// 运行：yoru run examples/math/06_ascii_raster.yoru
+// 覆盖：struct Seg、字段访问、fold + 双参 lambda（or 规约）、带类型标注的
+//       lambda 参数 fn(x: int)（map over Range 推断不出标量类型，必须标注）、
+//       map over range、for in range、一行 20 段插值 print（插值体走子解析器
+//       独立预算，详见 24 号文档 D-02）、全 int 算术。
+// 手法：像素 (x, y) 着 "*" 当且仅当 min_{s ∈ segs} dist(line(s), (x,y)) < 0.5。
+//       距离场渲染是声明式光栅化路线（每像素独立、可并行）；对比的 Bresenham
+//       增量点列收集在本篇放不下（Y-S9502，见 24 号文档 D-01）。
+// 场景：相机标定板——横/竖/两条对角线都横跨画布，故无限线距离即线段距离，
+//       无需端点夹紧。生产代码需把投影参数 t 夹紧到 [0,1]：
+//         let tnum = (px - s.x0) * dx + (py - s.y0) * dy
+//         if tnum <= 0 { return 端点 (x0,y0) 距² < 1 }
+//         if tnum >= dx*dx + dy*dy { return 端点 (x1,y1) 距² < 1 }
+// 结构注：fold 规约收在顶层 any_near 内而非内联进 map lambda——双层嵌套
+//       lambda 传递捕获会触发 Y-I9004（见 24 号文档 D-03），顶层 fn 的
+//       参数对 fold lambda 是直接父级局部，走 is_local 快路径。
+
+struct Seg {
+    x0: int
+    y0: int
+    x1: int
+    y1: int
+}
+
+// 距离平方比较（免 sqrt/abs，热路径零浮点）：
+// dist < 0.5 ⟺ cross² / len2 < 0.25 ⟺ cross * cross * 4 < len2
+fn near(s: Seg, px: int, py: int) -> bool {
+    let dx = s.x1 - s.x0
+    let dy = s.y1 - s.y0
+    let cross = (px - s.x0) * dy - (py - s.y0) * dx
+    return cross * cross * 4 < dx * dx + dy * dy
+}
+
+// 任一线段命中即真（fold + or 规约）
+fn any_near(segs: [Seg], px: int, py: int) -> bool {
+    return fold(segs, false, fn(acc: bool, s: Seg) = acc or near(s, px, py))
+}
+
+pub fn main() -> int {
+    let segs = [
+        Seg { x0: 0, y0: 3, x1: 19, y1: 3 },
+        Seg { x0: 0, y0: 0, x1: 19, y1: 10 },
+        Seg { x0: 0, y0: 10, x1: 19, y1: 0 },
+        Seg { x0: 9, y0: 0, x1: 9, y1: 10 },
+    ]
+    for r in range(0, 11) {
+        let row = map(range(0, 20), fn(x: int) = if any_near(segs, x, r) { "*" } else { "." })
+        print("${row[0]}${row[1]}${row[2]}${row[3]}${row[4]}${row[5]}${row[6]}${row[7]}${row[8]}${row[9]}${row[10]}${row[11]}${row[12]}${row[13]}${row[14]}${row[15]}${row[16]}${row[17]}${row[18]}${row[19]}")
+    }
+    return 0
+}
