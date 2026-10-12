@@ -15,6 +15,9 @@
 // 结构注：fold 规约收在顶层 any_near 内而非内联进 map lambda——双层嵌套
 //       lambda 传递捕获会触发 Y-I9004（见 24 号文档 D-03），顶层 fn 的
 //       参数对 fold lambda 是直接父级局部，走 is_local 快路径。
+//       另外 if 表达式作值在本构建静默产出 nil（spec 19 号 81/87 行承诺的
+//       if_expr 未实现，见 24 号文档 D-04），故单元格选择用 pick(hit) +
+//       if 语句早返回，绕开表达式位 if。
 
 struct Seg {
     x0: int
@@ -37,6 +40,14 @@ fn any_near(segs: [Seg], px: int, py: int) -> bool {
     return fold(segs, false, fn(acc: bool, s: Seg) = acc or near(s, px, py))
 }
 
+// 命中 → "*"，否则 "."（if 语句早返回；表达式位 if 见 D-04）
+fn pick(hit: bool) -> string {
+    if hit {
+        return "*"
+    }
+    return "."
+}
+
 pub fn main() -> int {
     let segs = [
         Seg { x0: 0, y0: 3, x1: 19, y1: 3 },
@@ -45,7 +56,7 @@ pub fn main() -> int {
         Seg { x0: 9, y0: 0, x1: 9, y1: 10 },
     ]
     for r in range(0, 11) {
-        let row = map(range(0, 20), fn(x: int) = if any_near(segs, x, r) { "*" } else { "." })
+        let row = map(range(0, 20), fn(x: int) = pick(any_near(segs, x, r)))
         print("${row[0]}${row[1]}${row[2]}${row[3]}${row[4]}${row[5]}${row[6]}${row[7]}${row[8]}${row[9]}${row[10]}${row[11]}${row[12]}${row[13]}${row[14]}${row[15]}${row[16]}${row[17]}${row[18]}${row[19]}")
     }
     return 0

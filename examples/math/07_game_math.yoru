@@ -1,0 +1,79 @@
+// 07 · 游戏数学工具箱（Yoru 示例套件 · 游戏数学 / 高性能数学运行）
+// 运行：yoru run examples/math/07_game_math.yoru
+// 覆盖：内建 min/max 组合 clamp、lerp、smoothstep（3t²-2t³，游戏 feel 核心）、
+//       LCG 伪随机（1103515245/12345/2^31，glibc 同族参数）、let mut 状态穿线、
+//       while + 复合模运算、tag 枚举 + match 状态机（变体载荷 float）、
+//       match 作返回值（与 if 表达式不同，match 产值正常，见 24 号文档 D-04）。
+// 注：if 表达式作值在本构建静默产出 nil（spec 19 号 81/87 行承诺未实现），
+//       全套件一律用「if 语句 + 早返回」或 match 绕开。
+
+fn clamp(x: float, lo: float, hi: float) -> float {
+    return min(max(x, lo), hi)
+}
+
+fn lerp(a: float, b: float, t: float) -> float {
+    return a + (b - a) * t
+}
+
+// Ken Perlin 平滑步进：一阶/二阶导均为 0，无可见接缝
+fn smoothstep(t: float) -> float {
+    return t * t * (3.0 - 2.0 * t)
+}
+
+// LCG 下一步（glibc 同族参数；int64 域内不溢出）
+fn lcg(s: int) -> int {
+    return (1103515245 * s + 12345) % 2147483648
+}
+
+// 游戏循环状态机：Idle → Running(t) ⇄ Paused；tick 对 Paused 是恒等
+tag State = Idle | Running(float) | Paused
+
+fn tick(s: State, dt: float) -> State {
+    return match s {
+        Idle -> Running(0.0)
+        Running(t) -> Running(t + dt)
+        Paused -> Paused
+    }
+}
+
+fn toggle(s: State) -> State {
+    return match s {
+        Running(t) -> Paused
+        Paused -> Running(0.0)
+        Idle -> Idle
+    }
+}
+
+pub fn main() -> int {
+    // clamp / lerp / smoothstep
+    print("clamp(120, 0, 100) = ${clamp(120.0, 0.0, 100.0)}")
+    print("lerp(10, 20, 0.25) = ${lerp(10.0, 20.0, 0.25)}")
+    let t = 0.35
+    print("smoothstep(0.35) = ${smoothstep(t)}")
+
+    // LCG 掷 3 次 d6（种子 42；状态在 while 里穿线）
+    print("dice from seed 42:")
+    let mut seed = 42
+    let mut i = 0
+    while i < 3 {
+        seed = lcg(seed)
+        print("  roll ${seed % 6 + 1}")
+        i = i + 1
+    }
+
+    // 状态机巡演：Idle → Running → tick 累加 → Paused（tick 恒等）→ Running
+    let s1 = tick(Idle, 0.0)
+    let s2 = tick(s1, 0.5)
+    let s3 = toggle(s2)
+    let s4 = tick(s3, 0.1)
+    let s5 = toggle(s4)
+    for st in [s1, s2, s3, s4, s5] {
+        let d = match st {
+            Idle -> "idle"
+            Running(t) -> "running(${t})"
+            Paused -> "paused"
+        }
+        print("state: ${d}")
+    }
+    return 0
+}

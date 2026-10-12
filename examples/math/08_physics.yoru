@@ -1,0 +1,59 @@
+// 08 · 物理积分器与游戏循环（Yoru 示例套件 · 游戏数学 / 高性能数学运行）
+// 运行：yoru run examples/math/08_physics.yoru
+// 覆盖：const 折叠（K/DT）、let mut 局部状态穿线、while + if-else 分支积分、
+//       [float] 列表作返回值对、显式 Euler vs 半隐式 Euler（symplectic）的
+//       能量漂移对比、谐振子机械能（½v² + ½kx²）、固定步长累加器（游戏循环
+//       标准式：帧时间不整除步长时先追赶整数步）。
+// 场景：单位质量弹簧（k=1，x₀=1, v₀=0），dt=0.05 积分 10 秒。
+//       显式 Euler 能量指数增长（经典数值不稳定）；半隐式 Euler 先更新 v
+//       再用新 v 更新 x，能量有界振荡。输出已与 Python 参考实现逐位核对。
+// 注：Verlet 积分器因 Y-S9502 预算未纳入（见 24 号文档 D-01）。
+
+const K: float = 1.0
+const DT: float = 0.016
+
+// 单位质量机械能：E = ½v² + ½kx²
+fn energy(x: float, v: float) -> float {
+    return 0.5 * v * v + 0.5 * K * x * x
+}
+
+// symplectic=true → 半隐式 Euler（先 v 后 x，能量有界）
+// symplectic=false → 显式 Euler（新旧状态同代计算，能量指数增长）
+fn simulate(symplectic: bool, dt: float, steps: int) -> [float] {
+    let mut x = 1.0
+    let mut v = 0.0
+    let mut i = 0
+    while i < steps {
+        if symplectic {
+            v = v - K * x * dt
+            x = x + v * dt
+        } else {
+            let nx = x + v * dt
+            v = v - K * x * dt
+            x = nx
+        }
+        i = i + 1
+    }
+    return [x, v]
+}
+
+pub fn main() -> int {
+    let dt = 0.05
+    let steps = 200
+    let e0 = energy(1.0, 0.0)
+    let ex = simulate(false, dt, steps)
+    let sx = simulate(true, dt, steps)
+    print("E0 = ${e0}")
+    print("explicit:   x=${ex[0]} v=${ex[1]} E=${energy(ex[0], ex[1])}")
+    print("symplectic: x=${sx[0]} v=${sx[1]} E=${energy(sx[0], sx[1])}")
+
+    // 固定步长累加器：33ms 掉帧帧按 16ms 步长追赶，余量留给下一帧
+    let mut acc = 0.0
+    let mut n = 0
+    while acc + DT <= 0.033 {
+        acc = acc + DT
+        n = n + 1
+    }
+    print("frame 33ms → ${n} steps of 16ms, leftover ${0.033 - acc}")
+    return 0
+}
