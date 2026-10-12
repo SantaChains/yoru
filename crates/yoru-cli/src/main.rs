@@ -184,10 +184,7 @@ fn run(path: &str, host_demo: bool, entry: Option<&str>) -> ExitCode {
 }
 
 /// 源码 → typeck → lowering → 结构验证。任何失败打印诊断并返回对应退出码。
-fn compile_to_module(
-    path: &str,
-    host_demo: bool,
-) -> Result<yoru_bytecode::Lbc0Module, ExitCode> {
+fn compile_to_module(path: &str, host_demo: bool) -> Result<yoru_bytecode::Lbc0Module, ExitCode> {
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -262,6 +259,9 @@ fn line_col(src: &str, offset: usize) -> (usize, usize) {
     let offset = offset.min(src.len());
     let before = &src[..offset];
     let line = before.bytes().filter(|b| *b == b'\n').count() + 1;
-    let col = before.rsplit('\n').next().map_or(1, |s| s.chars().count() + 1);
+    let col = before
+        .rsplit('\n')
+        .next()
+        .map_or(1, |s| s.chars().count() + 1);
     (line, col)
 }

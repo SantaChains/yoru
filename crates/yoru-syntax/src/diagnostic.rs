@@ -69,7 +69,14 @@ impl Diagnostic {
     }
 
     /// JSON schema v1（快照测试锁定）：severity/message/span 必有，code/suggestions 按需。
-    pub fn to_json(&self) -> Value {
+    ///
+    /// **边界出文本**（2026-10-12 外部消费者构建实证后改）：返回 JSON 字符串
+    /// 而非 `serde_json::Value`——编译器诊断边界的行业契约是文本
+    /// （rustc `--error-format=json`、gopls、clangd 均如此），且避免把
+    /// serde_json 钉进公开面（`exported_private_dependencies`：下游需自行
+    /// 声明同版本依赖，有版本错配风险）。需要结构化访问的消费者自行 parse
+    /// （dev-deps 加 serde_json 即可，不侵入本 crate 的公开契约）。
+    pub fn to_json(&self) -> String {
         let mut obj = serde_json::json!({
             "severity": match self.severity {
                 Severity::Error => "error",
@@ -89,10 +96,15 @@ impl Diagnostic {
         if !self.suggestions.is_empty() {
             map.insert(
                 "suggestions".into(),
-                Value::Array(self.suggestions.iter().map(|s| Value::String(s.clone())).collect()),
+                Value::Array(
+                    self.suggestions
+                        .iter()
+                        .map(|s| Value::String(s.clone()))
+                        .collect(),
+                ),
             );
         }
-        obj
+        serde_json::to_string(&obj).expect("diagnostic json serializes")
     }
 
     pub fn warning(message: impl Into<String>, span: Span) -> Self {

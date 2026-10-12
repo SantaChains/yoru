@@ -8,6 +8,10 @@ license.workspace = true
 [dependencies]
 yoru-syntax = { path = "../yoru-syntax" }
 yoru-stdlib = { path = "../yoru-stdlib" }
+
+[dev-dependencies]
+# 仅 JSON schema 快照测试使用（诊断边界文本的 parse 回验）；
+# 生产依赖不含 serde_json——下游传递依赖减负（2026-10-12 清理）。
 serde_json = "1"
 
 [lints]

@@ -47,7 +47,8 @@ pub fn lex(src: &str) -> (Vec<Token>, Vec<Diagnostic>) {
     };
     lx.run();
     (lx.out, lx.diagnostics)
-}/// Bidi 方向控制字符（CVE-2021-42574）与零宽字符（CVE-2021-42694 同族）。
+}
+/// Bidi 方向控制字符（CVE-2021-42574）与零宽字符（CVE-2021-42694 同族）。
 fn is_banned_char(c: char) -> bool {
     matches!(c,
         '\u{202A}'..='\u{202E}'   // LRE/LRO/RLE/RLO/PDF
@@ -340,7 +341,10 @@ impl Lexer<'_> {
             while matches!(self.peek_char(), Some(c) if c.is_ascii_hexdigit() || c == '_') {
                 self.pos += 1;
             }
-            let raw: String = self.src[ds..self.pos].chars().filter(|c| *c != '_').collect();
+            let raw: String = self.src[ds..self.pos]
+                .chars()
+                .filter(|c| *c != '_')
+                .collect();
             if raw.is_empty() {
                 let sp = Span::new(start, self.pos);
                 self.diagnostics.push(

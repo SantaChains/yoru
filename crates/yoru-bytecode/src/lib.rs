@@ -9,6 +9,14 @@
 //! 阶段 2 退出标准（20 号）：任意字节输入给验证器不 panic（fuzz 直靶）；
 //! 合法程序 编码 → 验证 → 反汇编往返一致。
 
+// 编译管线公开面固有暴露 `yoru_syntax` 的 `ast::Program`/`Diagnostic`
+// （`lower` 的输入即 AST、错误即诊断）与 `yoru_stdlib` 的 `BUILTINS` 镜像
+// 相关类型——管线消费者按构造依赖这些 crate，无版本错配面（workspace 内
+// semver 同步移动）。故对本灯做 crate 级 allow：这不是疏漏，是「编译器
+// 管线的公开签名以 AST/诊断为边界」的显式裁决（2026-10-12 外部消费者
+// 构建实证：workspace 内 clippy 对该灯结构性失明，仅下游构建暴露）。
+#![allow(exported_private_dependencies)]
+
 pub mod disasm;
 pub mod instr;
 pub mod lower;
@@ -16,9 +24,9 @@ pub mod module;
 pub mod verify;
 
 pub use instr::{Instr, Opcode};
-pub use lower::{lower, lower_with_hosts, BUILTIN_FNS};
+pub use lower::{BUILTIN_FNS, lower, lower_with_hosts};
 pub use module::{Const, Lbc0Module, Proto, StructInfo, TagInfo, UpvalueDesc, VERSION};
-pub use verify::{verify_module, VerifyError};
+pub use verify::{VerifyError, verify_module};
 
 #[cfg(test)]
 mod tests {
@@ -128,7 +136,11 @@ pub fn make(base: int) -> int {
         let m = lower_src(src);
         verify_module(&m).expect("verify");
         // lambda 原型应捕获 base（upvalue）
-        let lambda = m.protos.iter().find(|p| !p.upvalues.is_empty()).expect("upvalue proto");
+        let lambda = m
+            .protos
+            .iter()
+            .find(|p| !p.upvalues.is_empty())
+            .expect("upvalue proto");
         assert!(lambda.upvalues.iter().any(|u| u.is_local));
     }
 
@@ -221,10 +233,10 @@ fn h(x: int) -> Result<int, E> {
     #[test]
     fn bad_opcode_rejected() {
         let mut m = verified_minimal();
-        // 未分配 opcode 0x66：直接构造编码字
-        m.protos[0].code[0] = Instr::decode(0x66, 0).unwrap_or(Instr::new(Opcode::Nil));
+        // 未分配 opcode 0x67（0x66 已分配给 SetIndexLocal）：直接构造编码字
+        m.protos[0].code[0] = Instr::decode(0x67, 0).unwrap_or(Instr::new(Opcode::Nil));
         // decode 必失败时上面的 fallback 不可用——用原始字直接验证负路径
-        assert!(Instr::decode(0x66, 0).is_err());
+        assert!(Instr::decode(0x67, 0).is_err());
         // 对模块级验证：改走 deserialize 路径更真实，但此处直接检查 verify 拒绝
         // （用占位 Nil 替换后仍应通过——故只断言 decode 负路径）
         let _ = m;
@@ -233,7 +245,9 @@ fn h(x: int) -> Result<int, E> {
     #[test]
     fn jump_out_of_bounds_rejected() {
         let mut m = verified_minimal();
-        m.protos[0].code.insert(0, Instr::with_arg(Opcode::Jmp, 0x7F_FFFF));
+        m.protos[0]
+            .code
+            .insert(0, Instr::with_arg(Opcode::Jmp, 0x7F_FFFF));
         assert!(verify_module(&m).is_err());
     }
 
@@ -276,9 +290,9 @@ fn h(x: int) -> Result<int, E> {
                 locals: 0,
                 max_stack: 1,
                 code: vec![
-                    Instr::new(Opcode::True),            // depth 1
+                    Instr::new(Opcode::True),             // depth 1
                     Instr::with_arg(Opcode::JmpIfNot, 1), // pop → 0；跳 pc2（depth0）
-                    Instr::new(Opcode::Nil),             // fallthrough 从 depth0 进入压 1
+                    Instr::new(Opcode::Nil),              // fallthrough 从 depth0 进入压 1
                     Instr::new(Opcode::Return),
                 ],
                 upvalues: vec![],
@@ -302,10 +316,10 @@ fn h(x: int) -> Result<int, E> {
                 locals: 0,
                 max_stack: 1,
                 code: vec![
-                    Instr::new(Opcode::True),            // depth 1
+                    Instr::new(Opcode::True),             // depth 1
                     Instr::with_arg(Opcode::JmpIfNot, 2), // pop → 0；跳 pc3（depth0）
-                    Instr::new(Opcode::Nil),             // fallthrough pc2：depth0 → 压 1
-                    Instr::new(Opcode::Return),          // pc3：从跳转来 depth0，从 fallthrough 来 depth1 → 冲突
+                    Instr::new(Opcode::Nil),              // fallthrough pc2：depth0 → 压 1
+                    Instr::new(Opcode::Return), // pc3：从跳转来 depth0，从 fallthrough 来 depth1 → 冲突
                 ],
                 upvalues: vec![],
                 const_refs: vec![],
@@ -314,7 +328,10 @@ fn h(x: int) -> Result<int, E> {
             debug: None,
         };
         assert!(verify_module(&m).is_ok() || verify_module(&m).is_err()); // 不 panic
-        assert!(verify_module(&m2).is_err(), "branch depth mismatch must be rejected");
+        assert!(
+            verify_module(&m2).is_err(),
+            "branch depth mismatch must be rejected"
+        );
     }
 
     #[test]
@@ -378,7 +395,10 @@ mod registry_tests {
                 _ => None,
             })
             .collect();
-        assert!(names.contains(&"to_runes"), "模块限定调用应归一为 bare 名: {names:?}");
+        assert!(
+            names.contains(&"to_runes"),
+            "模块限定调用应归一为 bare 名: {names:?}"
+        );
         // 限定调用不产生 import 读取（归一后 import 槽仅留档）
         assert!(
             !m.protos
@@ -403,6 +423,9 @@ mod registry_tests {
                 _ => None,
             })
             .collect();
-        assert!(names.contains(&"parse") && names.contains(&"stringify"), "{names:?}");
+        assert!(
+            names.contains(&"parse") && names.contains(&"stringify"),
+            "{names:?}"
+        );
     }
 }

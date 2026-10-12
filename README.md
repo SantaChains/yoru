@@ -7,6 +7,12 @@ yoru run hello.yoru        # 解释执行
 yoru check hello.yoru      # 类型/语义检查，结构化诊断（Y-xxxx 错误码）
 ```
 
+**嵌入 Yoru**（宿主注入 + 双向调用，阶段 4 宿主桥）：
+
+```text
+cargo run -p yoru-cli --example embed_host   # 完整嵌入示例（typeck 签名面 + VM 闭包 + Rust 调脚本）
+```
+
 ## 仓库地图
 
 | 路径 | 内容 |
@@ -16,7 +22,7 @@ yoru check hello.yoru      # 类型/语义检查，结构化诊断（Y-xxxx 错�
 | `crates/yoru-bytecode` | LBC0 字节码 lowering 与验证器 |
 | `crates/yoru-vm` | 栈式 VM（资源三限 + 中断 + 观测） |
 | `crates/yoru-ffi` / `yoru-stdlib` | 宿主桥与标准库（阶段 4） |
-| `crates/yoru-cli` | `yoru` 命令行入口 |
+| `crates/yoru-cli` | `yoru` 命令行入口；`examples/embed_host.rs` = 嵌入示例 |
 | `L语言设计/`（仓库外同级目录） | 设计文档体系 00-22 号（决策记录 11 号、路线图 20 号） |
 
 ## 文档排版硬规则（21 号 §7）

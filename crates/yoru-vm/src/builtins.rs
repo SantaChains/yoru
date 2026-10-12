@@ -11,9 +11,9 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
 
+use crate::Vm;
 use crate::error::{RuntimeError, VmError};
 use crate::value::Value;
-use crate::Vm;
 
 impl Vm {
     pub(crate) fn dispatch_builtin(
@@ -40,11 +40,14 @@ impl Vm {
             "abs" => {
                 let v = arg(args, 0, name)?;
                 match v {
-                    Value::Int(a) => Ok(Value::Int(a.checked_abs().ok_or_else(|| {
-                        self.builtin_err(name, "integer overflow")
-                    })?)),
+                    Value::Int(a) => {
+                        Ok(Value::Int(a.checked_abs().ok_or_else(|| {
+                            self.builtin_err(name, "integer overflow")
+                        })?))
+                    }
                     Value::Float(a) => Ok(Value::Float(a.abs())),
-                    other => Err(self.builtin_err(name, format!("abs expects number, got {}", other.display()))),
+                    other => Err(self
+                        .builtin_err(name, format!("abs expects number, got {}", other.display()))),
                 }
             }
             "min" | "max" => {
@@ -52,14 +55,18 @@ impl Vm {
                 let b = arg(args, 1, name)?.clone();
                 let ord = match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => x.cmp(y),
-                    (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).ok_or_else(|| {
-                        self.builtin_err(name, "NaN comparison unordered")
-                    })?,
+                    (Value::Float(x), Value::Float(y)) => x
+                        .partial_cmp(y)
+                        .ok_or_else(|| self.builtin_err(name, "NaN comparison unordered"))?,
                     _ => {
                         return Err(self.builtin_err(name, "min/max expects two numbers"));
                     }
                 };
-                let take_first = if name == "min" { ord != Ordering::Greater } else { ord != Ordering::Less };
+                let take_first = if name == "min" {
+                    ord != Ordering::Greater
+                } else {
+                    ord != Ordering::Less
+                };
                 Ok(if take_first { a } else { b })
             }
             "parse_int" => {
@@ -67,14 +74,20 @@ impl Vm {
                 let Value::Str(s) = &v else {
                     return Err(self.builtin_err(name, "parse_int expects string"));
                 };
-                Ok(mk_option(self.option_tag, s.trim().parse::<i64>().ok().map(Value::Int)))
+                Ok(mk_option(
+                    self.option_tag,
+                    s.trim().parse::<i64>().ok().map(Value::Int),
+                ))
             }
             "parse_float" => {
                 let v = arg(args, 0, name)?;
                 let Value::Str(s) = &v else {
                     return Err(self.builtin_err(name, "parse_float expects string"));
                 };
-                Ok(mk_option(self.option_tag, s.trim().parse::<f64>().ok().map(Value::Float)))
+                Ok(mk_option(
+                    self.option_tag,
+                    s.trim().parse::<f64>().ok().map(Value::Float),
+                ))
             }
             "to_runes" => {
                 let v = arg(args, 0, name)?;
@@ -92,7 +105,8 @@ impl Vm {
             "range" => match args.len() {
                 1 => match &arg(args, 0, name)? {
                     Value::Int(n) => Ok(Value::Range(0, *n)),
-                    other => Err(self.builtin_err(name, format!("range expects int, got {}", other.display()))),
+                    other => Err(self
+                        .builtin_err(name, format!("range expects int, got {}", other.display()))),
                 },
                 2 => {
                     let a = arg(args, 0, name)?.clone();
@@ -112,7 +126,13 @@ impl Vm {
                 let items: Vec<Value> = m
                     .borrow()
                     .iter()
-                    .map(|(k, val)| if name == "keys" { k.clone() } else { val.clone() })
+                    .map(|(k, val)| {
+                        if name == "keys" {
+                            k.clone()
+                        } else {
+                            val.clone()
+                        }
+                    })
                     .collect();
                 self.alloc(items.len() as i64 * 16 + 32)?;
                 Ok(Value::List(Rc::new(RefCell::new(items))))
@@ -167,8 +187,10 @@ impl Vm {
                         _ => unreachable!(),
                     });
                 } else {
-                    return Err(self
-                        .builtin_err(name, "sort expects homogeneous int or str list (floats: sort_floats)"));
+                    return Err(self.builtin_err(
+                        name,
+                        "sort expects homogeneous int or str list (floats: sort_floats)",
+                    ));
                 }
                 self.alloc(items.len() as i64 * 16 + 32)?;
                 Ok(Value::List(Rc::new(RefCell::new(items))))
@@ -181,12 +203,10 @@ impl Vm {
                 let mut items = l.borrow().clone();
                 let mut any_nan = false;
                 items.sort_by(|a, b| match (a, b) {
-                    (Value::Float(x), Value::Float(y)) => {
-                        x.partial_cmp(y).unwrap_or_else(|| {
-                            any_nan = true;
-                            Ordering::Equal
-                        })
-                    }
+                    (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or_else(|| {
+                        any_nan = true;
+                        Ordering::Equal
+                    }),
                     _ => Ordering::Equal,
                 });
                 if any_nan {
@@ -197,7 +217,12 @@ impl Vm {
             }
             "assert" => {
                 // strip 产物（无调试段）：assert = no-op（决策 70）
-                if self.module.as_ref().map(|m| m.debug.is_none()).unwrap_or(true) {
+                if self
+                    .module
+                    .as_ref()
+                    .map(|m| m.debug.is_none())
+                    .unwrap_or(true)
+                {
                     return Ok(Value::Nil);
                 }
                 let v = arg(args, 0, name)?;
@@ -224,20 +249,17 @@ impl Vm {
             "sqrt" => {
                 let v = arg(args, 0, name)?;
                 let Value::Float(f) = &v else {
-                    return Err(self.builtin_err(
-                        name,
-                        format!("sqrt expects float, got {}", v.display()),
-                    ));
+                    return Err(
+                        self.builtin_err(name, format!("sqrt expects float, got {}", v.display()))
+                    );
                 };
                 Ok(Value::Float(f.sqrt()))
             }
             "floor" | "ceil" => {
                 let v = arg(args, 0, name)?;
                 let Value::Float(f) = &v else {
-                    return Err(self.builtin_err(
-                        name,
-                        format!("{name} expects float, got {}", v.display()),
-                    ));
+                    return Err(self
+                        .builtin_err(name, format!("{name} expects float, got {}", v.display())));
                 };
                 if !f.is_finite() {
                     return Err(self.builtin_err(name, format!("{name} expects finite float")));
@@ -253,10 +275,8 @@ impl Vm {
             "upper" => {
                 let v = arg(args, 0, name)?;
                 let Value::Str(s) = &v else {
-                    return Err(self.builtin_err(
-                        name,
-                        format!("upper expects string, got {}", v.display()),
-                    ));
+                    return Err(self
+                        .builtin_err(name, format!("upper expects string, got {}", v.display())));
                 };
                 Ok(Value::Str(Rc::from(s.to_uppercase().as_str())))
             }
@@ -264,10 +284,8 @@ impl Vm {
                 // T1：Json 为宿主不透明值（决策 28）——存解析文本，stringify 透传
                 let v = arg(args, 0, name)?;
                 let Value::Str(s) = &v else {
-                    return Err(self.builtin_err(
-                        name,
-                        format!("parse expects string, got {}", v.display()),
-                    ));
+                    return Err(self
+                        .builtin_err(name, format!("parse expects string, got {}", v.display())));
                 };
                 self.alloc(s.len() as i64)?;
                 Ok(Value::Opaque(Rc::new(s.to_string())))

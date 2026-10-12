@@ -20,7 +20,11 @@ fn main() {
         }
         Err(ds) => {
             for d in ds {
-                println!("lower error: [{}] {}", d.code.as_deref().unwrap_or("-"), d.message);
+                println!(
+                    "lower error: [{}] {}",
+                    d.code.as_deref().unwrap_or("-"),
+                    d.message
+                );
             }
         }
     }

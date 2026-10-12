@@ -2,7 +2,10 @@
 use yoru_syntax::lexer;
 
 fn main() {
-    let depth: usize = std::env::args().nth(1).and_then(|a| a.parse().ok()).unwrap_or(90_000);
+    let depth: usize = std::env::args()
+        .nth(1)
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(90_000);
     let mut src = String::from("pub fn main() -> int {\n    return ");
     src.push_str(&"(".repeat(depth));
     src.push('1');

@@ -65,9 +65,9 @@ impl DebugInfo {
 
     /// 按名字找原型序号（入口发现：`main` 或 --entry）。
     pub fn proto_by_name(&self, name: &str, strings: &[String]) -> Option<usize> {
-        self.names
-            .iter()
-            .position(|n| n.map(|i| strings.get(i as usize).map(String::as_str) == Some(name)) == Some(true))
+        self.names.iter().position(|n| {
+            n.map(|i| strings.get(i as usize).map(String::as_str) == Some(name)) == Some(true)
+        })
     }
 
     /// pc → 源码字节偏移（二分 RLE run）。

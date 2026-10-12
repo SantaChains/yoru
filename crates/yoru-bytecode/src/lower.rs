@@ -19,8 +19,8 @@
 use std::collections::{HashMap, HashSet};
 
 use yoru_syntax::ast;
-use yoru_syntax::diagnostic::{Diagnostic, Severity, Span};
 use yoru_syntax::ast::StrItem;
+use yoru_syntax::diagnostic::{Diagnostic, Severity, Span};
 
 use crate::instr::{Instr, Opcode};
 use crate::module::{Const, Lbc0Module, Proto, StructInfo, TagInfo, UpvalueDesc};
@@ -40,9 +40,29 @@ const CONVERT_RUNE: u32 = 2;
 /// assert——自决策 77 起为核内内建，VM 原生实现）。模块限定调用（`string.to_runes`）
 /// 在 lower 归一为同一 bare 名（见 `module_builtin_ref`）。
 pub const BUILTIN_FNS: &[&str] = &[
-    "len", "map", "filter", "fold", "sort", "sort_floats", "keys", "values", "abs", "min", "max",
-    "to_runes", "parse_int", "parse_float", "print", "range", "assert", "sqrt", "floor", "ceil",
-    "upper", "parse", "stringify",
+    "len",
+    "map",
+    "filter",
+    "fold",
+    "sort",
+    "sort_floats",
+    "keys",
+    "values",
+    "abs",
+    "min",
+    "max",
+    "to_runes",
+    "parse_int",
+    "parse_float",
+    "print",
+    "range",
+    "assert",
+    "sqrt",
+    "floor",
+    "ceil",
+    "upper",
+    "parse",
+    "stringify",
 ];
 
 /// lowering 入口。lowerer 对 AST 的递归与大栈线程配合（同 parse_source 注记：
@@ -70,7 +90,10 @@ pub fn lower_with_hosts(
     })
 }
 
-fn lower_inner(program: &ast::Program, host_fns: HashSet<String>) -> Result<Lbc0Module, Vec<Diagnostic>> {
+fn lower_inner(
+    program: &ast::Program,
+    host_fns: HashSet<String>,
+) -> Result<Lbc0Module, Vec<Diagnostic>> {
     let mut lw = Lowerer::new(host_fns);
     lw.install_prelude();
     lw.declare_decls(program);
@@ -169,9 +192,11 @@ fn stmt_always_terminates(s: &ast::Stmt) -> bool {
 /// match 无 catch-all 时保守不收束（穷尽性是 typeck 契约，lower 不信）。
 fn expr_always_terminates(e: &ast::Expr) -> bool {
     match &e.kind {
-        ast::ExprKind::If { then_, else_: Some(els), .. } => {
-            block_always_terminates(then_) && expr_always_terminates(els)
-        }
+        ast::ExprKind::If {
+            then_,
+            else_: Some(els),
+            ..
+        } => block_always_terminates(then_) && expr_always_terminates(els),
         ast::ExprKind::Match { arms, .. } => {
             let catchall = arms
                 .iter()
@@ -254,13 +279,19 @@ impl Lowerer {
         self.std_slot = self.declare_import("std");
         let result_name = self.intern("Result");
         let ri = self.m.tags.len() as u32;
-        self.m.tags.push(TagInfo { name: result_name, variants: vec![true, true] });
+        self.m.tags.push(TagInfo {
+            name: result_name,
+            variants: vec![true, true],
+        });
         self.tags.insert("Result".into(), ri);
         self.variants.insert("Ok".into(), (ri, 0));
         self.variants.insert("Err".into(), (ri, 1));
         let option_name = self.intern("Option");
         let oi = self.m.tags.len() as u32;
-        self.m.tags.push(TagInfo { name: option_name, variants: vec![false, true] });
+        self.m.tags.push(TagInfo {
+            name: option_name,
+            variants: vec![false, true],
+        });
         self.tags.insert("Option".into(), oi);
         self.variants.insert("None".into(), (oi, 0));
         self.variants.insert("Some".into(), (oi, 1));
@@ -293,7 +324,11 @@ impl Lowerer {
                 ast::DeclKind::Tag { name, variants, .. } => {
                     self.register_tag(name, variants);
                 }
-                ast::DeclKind::Type { name, body: ast::TypeBody::Union(vs), .. } => {
+                ast::DeclKind::Type {
+                    name,
+                    body: ast::TypeBody::Union(vs),
+                    ..
+                } => {
                     // `type Tree[T] = Node(...) | Leaf` 与 tag 声明同构（19.5 示例形式）
                     self.register_tag(name, vs);
                 }
@@ -304,7 +339,10 @@ impl Lowerer {
                         self.field_id(&f.name); // 字段名进全局字段表
                     }
                     let sname = self.intern(name);
-                    self.m.structs.push(StructInfo { name: sname, fields: finfos });
+                    self.m.structs.push(StructInfo {
+                        name: sname,
+                        fields: finfos,
+                    });
                     self.structs.insert(name.clone(), si);
                 }
                 ast::DeclKind::Const { name, value, .. } => match self.fold_const(value) {
@@ -369,7 +407,10 @@ impl Lowerer {
             flags.push(v.payload.is_some());
         }
         let tname = self.intern(name);
-        self.m.tags.push(TagInfo { name: tname, variants: flags });
+        self.m.tags.push(TagInfo {
+            name: tname,
+            variants: flags,
+        });
         self.tags.insert(name.to_string(), ti);
     }
 
@@ -400,7 +441,11 @@ impl Lowerer {
             scopes: vec![Vec::new()],
             nslots: 0, // 参数由 declare_local 从 0 号槽分配
             loops: Vec::new(),
-            captures: vec![CaptureLayer { proto_idx, locals: Vec::new(), upvals: Vec::new() }],
+            captures: vec![CaptureLayer {
+                proto_idx,
+                locals: Vec::new(),
+                upvals: Vec::new(),
+            }],
         });
         for p in params {
             self.declare_local(&p.name);
@@ -415,13 +460,19 @@ impl Lowerer {
         // 尾部无终结指令 → 补 NIL + RETURN（unit 返回语义）
         if !matches!(
             self.m.protos[proto_idx].code.last(),
-            Some(Instr { op: Opcode::Return | Opcode::Raise, .. })
+            Some(Instr {
+                op: Opcode::Return | Opcode::Raise,
+                ..
+            })
         ) {
             self.emit_op(Opcode::Nil);
             self.emit_op(Opcode::Return);
         }
         // 捕获层 upvalue 描述符落盘
-        let ups: Vec<UpvalueDesc> = self.cur.as_ref().unwrap()
+        let ups: Vec<UpvalueDesc> = self
+            .cur
+            .as_ref()
+            .unwrap()
             .captures
             .last()
             .map(|l| l.upvals.iter().map(|(_, _, d)| d.clone()).collect())
@@ -462,7 +513,10 @@ impl Lowerer {
         let st = self.cur.as_ref().expect("patch outside fn");
         let pi = st.proto_idx;
         let off = (target as i64 - pc as i64) as i32;
-        debug_assert!((-0x80_0000..=0x7F_FFFF).contains(&off), "jump offset exceeds i24");
+        debug_assert!(
+            (-0x80_0000..=0x7F_FFFF).contains(&off),
+            "jump offset exceeds i24"
+        );
         self.m.protos[pi].code[pc].arg = (off as u32) & 0x00FF_FFFF;
     }
 
@@ -482,7 +536,11 @@ impl Lowerer {
     }
 
     fn push_scope(&mut self) {
-        self.cur.as_mut().expect("scope outside fn").scopes.push(Vec::new());
+        self.cur
+            .as_mut()
+            .expect("scope outside fn")
+            .scopes
+            .push(Vec::new());
     }
 
     fn pop_scope(&mut self) {
@@ -509,10 +567,16 @@ impl Lowerer {
             let st = self.cur.as_ref().unwrap();
             let layer = &st.captures[layer_idx];
             if let Some((_, slot)) = layer.locals.iter().rev().find(|(n, _)| n == name) {
-                return Some(UpvalueDesc { is_local: true, index: *slot });
+                return Some(UpvalueDesc {
+                    is_local: true,
+                    index: *slot,
+                });
             }
             if let Some((_, uv, _)) = layer.upvals.iter().rev().find(|(n, _, _)| n == name) {
-                return Some(UpvalueDesc { is_local: false, index: *uv });
+                return Some(UpvalueDesc {
+                    is_local: false,
+                    index: *uv,
+                });
             }
         }
         if layer_idx == 0 {
@@ -523,7 +587,10 @@ impl Lowerer {
         let layer = &mut st.captures[layer_idx];
         let idx = layer.upvals.len() as u16;
         layer.upvals.push((name.to_string(), idx, parent_desc));
-        Some(UpvalueDesc { is_local: false, index: idx })
+        Some(UpvalueDesc {
+            is_local: false,
+            index: idx,
+        })
     }
 
     // ---- 语句 ----
@@ -777,9 +844,12 @@ impl Lowerer {
                     self.emit_arg(Opcode::Convert, t);
                 }
             }
-            ast::ExprKind::StructLit { name, inits, spread, .. } => {
-                self.lower_struct_lit(name, inits, spread.as_deref(), e.span)
-            }
+            ast::ExprKind::StructLit {
+                name,
+                inits,
+                spread,
+                ..
+            } => self.lower_struct_lit(name, inits, spread.as_deref(), e.span),
             ast::ExprKind::List(items) => {
                 for it in items {
                     self.lower_expr(it);
@@ -836,7 +906,11 @@ impl Lowerer {
             return;
         }
         // 2. 捕获链（lambda 内）
-        let is_lambda = self.cur.as_ref().map(|st| st.captures.len() > 1).unwrap_or(false);
+        let is_lambda = self
+            .cur
+            .as_ref()
+            .map(|st| st.captures.len() > 1)
+            .unwrap_or(false);
         if is_lambda {
             let top = self.cur.as_ref().unwrap().captures.len() - 1;
             if let Some(d) = self.resolve_capture(top, name) {
@@ -880,7 +954,11 @@ impl Lowerer {
             self.emit_arg(Opcode::Const, ci);
             return;
         }
-        self.err("Y-T0913", format!("未解析的名字 `{name}`（typeck 应先行拦截）"), span);
+        self.err(
+            "Y-T0913",
+            format!("未解析的名字 `{name}`（typeck 应先行拦截）"),
+            span,
+        );
         self.emit_op(Opcode::Nil); // 保持栈效应可验证
     }
 
@@ -905,7 +983,11 @@ impl Lowerer {
             loops: Vec::new(),
             captures: outer.captures.clone(),
         };
-        st.captures.push(CaptureLayer { proto_idx: pi, locals: Vec::new(), upvals: Vec::new() });
+        st.captures.push(CaptureLayer {
+            proto_idx: pi,
+            locals: Vec::new(),
+            upvals: Vec::new(),
+        });
         self.cur = Some(st);
         for p in params {
             self.declare_local(&p.name);
@@ -919,12 +1001,18 @@ impl Lowerer {
         }
         if !matches!(
             self.m.protos[pi].code.last(),
-            Some(Instr { op: Opcode::Return | Opcode::Raise, .. })
+            Some(Instr {
+                op: Opcode::Return | Opcode::Raise,
+                ..
+            })
         ) {
             self.emit_op(Opcode::Nil);
             self.emit_op(Opcode::Return);
         }
-        let ups: Vec<UpvalueDesc> = self.cur.as_ref().unwrap()
+        let ups: Vec<UpvalueDesc> = self
+            .cur
+            .as_ref()
+            .unwrap()
             .captures
             .last()
             .map(|l| l.upvals.iter().map(|(_, _, d)| d.clone()).collect())
@@ -933,7 +1021,6 @@ impl Lowerer {
 
         self.cur = Some(outer);
     }
-
 
     fn lower_if(
         &mut self,
@@ -947,14 +1034,20 @@ impl Lowerer {
         let jnot = self.emit_op(Opcode::JmpIfNot);
         self.lower_block(then_, value_mode);
         // then 全路径收束时跳过 jend（canonical：无死码；路径级分析）
-        let jend =
-            if block_always_terminates(then_) { None } else { Some(self.emit_op(Opcode::Jmp)) };
+        let jend = if block_always_terminates(then_) {
+            None
+        } else {
+            Some(self.emit_op(Opcode::Jmp))
+        };
         let else_pc = self.code_len();
         self.patch_jump(jnot, else_pc);
         match else_ {
             Some(e) => match &e.kind {
                 ast::ExprKind::If { .. } if !value_mode => {
-                    if let ast::ExprKind::If { cond, then_, else_, .. } = &e.kind {
+                    if let ast::ExprKind::If {
+                        cond, then_, else_, ..
+                    } = &e.kind
+                    {
                         self.lower_if(cond, then_, else_.as_deref(), false, e.span);
                     }
                 }
@@ -998,9 +1091,7 @@ impl Lowerer {
             match &arm.pattern {
                 // RW-e 消歧：裸 identifier 先查变体表——命中即无载荷变体模式，
                 // 否则才是 catch-all 绑定（名字解析先查变体，19 号 §19.9e）
-                ast::Pattern::Bind(name)
-                    if name != "_" && self.variants.contains_key(name) =>
-                {
+                ast::Pattern::Bind(name) if name != "_" && self.variants.contains_key(name) => {
                     let ci = {
                         let &(tag, variant) = self.variants.get(name).unwrap();
                         self.add_const(Const::Variant { tag, variant })
@@ -1067,7 +1158,9 @@ impl Lowerer {
                     self.patch_jump(jnext, na);
                 }
                 ast::Pattern::Int(v) => self.lower_literal_arm(t, &Const::Int(*v), arm, &mut ends),
-                ast::Pattern::Float(v) => self.lower_literal_arm(t, &Const::Float(*v), arm, &mut ends),
+                ast::Pattern::Float(v) => {
+                    self.lower_literal_arm(t, &Const::Float(*v), arm, &mut ends)
+                }
                 ast::Pattern::Bool(b) => {
                     self.emit_arg(Opcode::LoadLocal, t as u32);
                     self.emit_op(if *b { Opcode::True } else { Opcode::False });
@@ -1301,7 +1394,10 @@ impl Lowerer {
                     self.field_id(&f.name);
                 }
                 let sname = self.intern(name);
-                self.m.structs.push(StructInfo { name: sname, fields: finfos });
+                self.m.structs.push(StructInfo {
+                    name: sname,
+                    fields: finfos,
+                });
                 self.structs.insert(name.to_string(), si);
                 si
             }
@@ -1410,6 +1506,21 @@ impl Lowerer {
             }
             ast::ExprKind::Index { base, index } => match index {
                 ast::IndexKind::Single(idx) => {
+                    // 快路径：base 是局部变量 → SetIndexLocal 对槽位原地变异。
+                    // 走通用 SetIndex 时栈上容器副本与局部槽双重引用，COW 互斥
+                    // 判定（决策 13）恒不成立 → 每次赋值整表拷贝（T2b 基准实测）。
+                    // 复合赋值（+=）仍走原路径（需读改写三temp，罕见）。
+                    if bin.is_none() {
+                        if let ast::ExprKind::Ident(name) = &base.kind {
+                            if let Some(slot) = self.lookup_local(name) {
+                                self.lower_expr(idx);
+                                self.lower_expr(value);
+                                self.emit_arg(Opcode::SetIndexLocal, slot as u32);
+                                self.emit_op(Opcode::Nil);
+                                return;
+                            }
+                        }
+                    }
                     self.lower_lvalue_prefix(base);
                     self.lower_expr(idx);
                     match bin {
@@ -1461,7 +1572,11 @@ impl Lowerer {
                 } else if let Some(&slot) = self.imports.get(name) {
                     self.emit_arg(Opcode::LoadImport, slot);
                 } else {
-                    self.err("Y-T0922", format!("赋值目标基础 `{name}` 不是局部绑定"), e.span);
+                    self.err(
+                        "Y-T0922",
+                        format!("赋值目标基础 `{name}` 不是局部绑定"),
+                        e.span,
+                    );
                     self.emit_op(Opcode::Nil);
                 }
             }
@@ -1499,7 +1614,10 @@ impl Lowerer {
                 .code
                 .iter()
                 .filter(|i| {
-                    matches!(i.op, Opcode::Const | Opcode::IsTag | Opcode::Payload | Opcode::TagNew)
+                    matches!(
+                        i.op,
+                        Opcode::Const | Opcode::IsTag | Opcode::Payload | Opcode::TagNew
+                    )
                 })
                 .map(|i| i.arg)
                 .collect();

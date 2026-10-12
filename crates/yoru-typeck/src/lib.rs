@@ -5,6 +5,11 @@
 //! - 诊断 JSON schema v1（code 一等字段）经快照测试锁定；
 //! - 权威样例（19.5）typeck 零错误；每类类型错误有 fix-it 建议。
 
+// 同 yoru-bytecode 裁决：typeck 公开签名以 AST（`Program`）/诊断
+// （`Diagnostic`/`Span`）/AST 类型（`yoru_syntax::Type`）/注册表记录
+// （`yoru_stdlib::Builtin`）为边界，管线消费者按构造依赖这些 crate。
+#![allow(exported_private_dependencies)]
+
 mod check;
 mod env;
 mod ty;
@@ -12,7 +17,7 @@ mod ty;
 pub use env::{Env, HostSig};
 pub use ty::Ty;
 
-use yoru_syntax::{ast, Diagnostic};
+use yoru_syntax::{Diagnostic, ast};
 
 /// 解析 + 类型检查一站式入口（CLI 用）。
 /// 类型检查入口。checker 对 AST 的递归与大栈线程配合（同 parse_source 注记）。
@@ -167,7 +172,11 @@ mod tests {
             "fn g() -> Result[int, E] {\n    return Ok(1)\n}\n",
             "fn f() {\n    let _ = g()\n}\n",
         );
-        assert!(warnings(src).iter().all(|d| d.code.as_deref() != Some("W-T0001")));
+        assert!(
+            warnings(src)
+                .iter()
+                .all(|d| d.code.as_deref() != Some("W-T0001"))
+        );
     }
 
     // ===== 决策 21：协议 impl 校验 =====
@@ -200,7 +209,11 @@ mod tests {
             "struct V { x: int }\n",
             "fn f(a: V, b: V) -> V {\n    return a + b\n}\n",
         );
-        assert!(errors(src).iter().any(|d| d.code.as_deref() == Some("Y-T0022")));
+        assert!(
+            errors(src)
+                .iter()
+                .any(|d| d.code.as_deref() == Some("Y-T0022"))
+        );
     }
 
     // ===== 决策 23：distinct =====
@@ -292,13 +305,21 @@ mod tests {
     #[test]
     fn unused_variable_warns() {
         let src = "fn f() -> int {\n    let x = 1\n    return 2\n}\n";
-        assert!(warnings(src).iter().any(|d| d.code.as_deref() == Some("W-T0002")));
+        assert!(
+            warnings(src)
+                .iter()
+                .any(|d| d.code.as_deref() == Some("W-T0002"))
+        );
     }
 
     #[test]
     fn unused_import_warns() {
         let src = "import math from \"std\"\nfn f() -> int {\n    return 1\n}\n";
-        assert!(warnings(src).iter().any(|d| d.code.as_deref() == Some("W-T0003")));
+        assert!(
+            warnings(src)
+                .iter()
+                .any(|d| d.code.as_deref() == Some("W-T0003"))
+        );
     }
 
     // ===== 泛型调用推断 =====
@@ -321,7 +342,8 @@ mod tests {
         let src = "fn f(a: int) -> float {\n    return a * 0.5\n}\n";
         let errs = errors(src);
         assert_eq!(errs.len(), 1);
-        let json = &errs[0].to_json();
+        // 边界文本契约（诊断 JSON schema v1）：parse 回验，语义与 Value 快照等价
+        let json: serde_json::Value = serde_json::from_str(&errs[0].to_json()).expect("valid json");
         let expected = serde_json::json!({
             "severity": "error",
             "message": "int 与 float 不可混算（决策 26）：`int` 与 `float`",
@@ -329,7 +351,7 @@ mod tests {
             "code": "Y-T0003",
             "suggestions": ["显式转换：`x as float`"],
         });
-        assert_eq!(json, &expected, "schema v1 快照不符");
+        assert_eq!(json, expected, "schema v1 快照不符");
     }
 
     // ===== 顶层缺失 return =====
@@ -345,14 +367,16 @@ mod tests {
     fn ck_with_hosts(src: &str, hosts: &[(&str, HostSig)]) -> Vec<Diagnostic> {
         let (tokens, _ld) = yoru_syntax::tokenize(src);
         let program = parser::parse(&tokens).expect("parse");
-        let env = Env::core()
-            .with_host_fns(hosts.iter().map(|(n, s)| (n.to_string(), s.clone())));
+        let env = Env::core().with_host_fns(hosts.iter().map(|(n, s)| (n.to_string(), s.clone())));
         check(&program, &env)
     }
 
     #[test]
     fn host_fn_registered_typechecks() {
-        let sig = HostSig { params: vec![Ty::Int], ret: Ty::Int };
+        let sig = HostSig {
+            params: vec![Ty::Int],
+            ret: Ty::Int,
+        };
         let ds = ck_with_hosts(
             "pub fn main() -> int {\n    return double(21)\n}\n",
             &[("double", sig)],
@@ -370,7 +394,10 @@ mod tests {
     #[test]
     fn host_fn_call_site_signature_checked() {
         // 签名契约在 typeck 校验：参数个数/类型不符 = 编译期错误
-        let sig = HostSig { params: vec![Ty::Int], ret: Ty::Int };
+        let sig = HostSig {
+            params: vec![Ty::Int],
+            ret: Ty::Int,
+        };
         let bad_arity = ck_with_hosts(
             "pub fn main() -> int {\n    return double()\n}\n",
             &[("double", sig.clone())],
@@ -399,7 +426,9 @@ mod registry_face_tests {
             assert!(env.free_fns.contains_key(b.name), "free 面缺失: {}", b.name);
             if let Some(m) = b.module {
                 assert!(
-                    env.modules["std"].get(m).is_some_and(|mm| mm.contains_key(b.name)),
+                    env.modules["std"]
+                        .get(m)
+                        .is_some_and(|mm| mm.contains_key(b.name)),
                     "模块面缺失: {m}.{}",
                     b.name
                 );
@@ -429,21 +458,31 @@ mod registry_face_tests {
 
     #[test]
     fn numeric_builtins_same_kind() {
-        assert!(errors("fn f() -> int {\n    return abs(0 - 3) + min(1, 2) + max(4, 5)\n}").is_empty());
+        assert!(
+            errors("fn f() -> int {\n    return abs(0 - 3) + min(1, 2) + max(4, 5)\n}").is_empty()
+        );
         assert!(errors("fn f() -> float {\n    return min(1.0, 2.0)\n}").is_empty());
         // 决策 26：int/float 不隐式混合
         assert!(!errors("fn f() {\n    let x = min(1, 2.0)\n}").is_empty());
         // abs 返回位落地为实参类型（float 入 → float 出）
         assert!(errors("fn f() -> float {\n    return abs(3.5)\n}").is_empty());
+        // D3 行为锁定：int 入 → int 出，可绑定 int（Num 不向上漂移）
+        assert!(errors("fn f() -> int {\n    let y = abs(0 - 3)\n    return y\n}").is_empty());
     }
 
     #[test]
     fn math_module_faces() {
         // std 模块面需显式 import（19.2 单一命名空间；未用 import 另有 W-T0003）
-        assert!(errors("import math from \"std\"\n\nfn f() -> float {\n    return math.sqrt(2.0)\n}").is_empty());
+        assert!(
+            errors("import math from \"std\"\n\nfn f() -> float {\n    return math.sqrt(2.0)\n}")
+                .is_empty()
+        );
         assert!(errors("import math from \"std\"\n\nfn f() -> int {\n    return math.floor(2.7) + math.ceil(2.1)\n}").is_empty());
         // 决策 26：sqrt 不收 int
-        assert!(!errors("import math from \"std\"\n\nfn f() -> float {\n    return math.sqrt(2)\n}").is_empty());
+        assert!(
+            !errors("import math from \"std\"\n\nfn f() -> float {\n    return math.sqrt(2)\n}")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -462,5 +501,96 @@ mod registry_face_tests {
     fn parse_option_faces() {
         assert!(errors("fn f(s: string) -> int? {\n    return parse_int(s)\n}").is_empty());
         assert!(!errors("fn f(s: int) -> int? {\n    return parse_int(s)\n}").is_empty());
+    }
+
+    // ===== 决策 78 / D1：模块限定内建名作值（值位归一）=====
+
+    #[test]
+    fn module_qualified_builtin_as_value() {
+        // 回归：此前 `map(xs, math.floor)` 级联 4 条误诊（模块不能作为值 →
+        // unit 无字段 → 泛型未绑定 → 类型不匹配），根因是 typeck 值位缺面
+        assert!(
+            errors(concat!(
+                "import math from \"std\"\n\n",
+                "fn f(xs: [float]) -> [int] {\n    return map(xs, math.floor)\n}\n",
+            ))
+            .is_empty()
+        );
+        assert!(
+            errors(concat!(
+                "import string from \"std\"\n\n",
+                "fn g(ss: [string]) -> [[rune]] {\n    return map(ss, string.to_runes)\n}\n",
+            ))
+            .is_empty()
+        );
+        // 与裸名作值同构：同一内建函数面
+        assert!(
+            errors(concat!(
+                "import math from \"std\"\n\n",
+                "fn f(xs: [float]) -> [int] {\n    return map(xs, floor)\n}\n",
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn std_module_field_miss_in_value_position_is_single_error() {
+        // 值位字段缺失 = 调用位同一诊断（Y-T0007 根因首发），
+        // 误导性级联（「模块不能作为值」「unit 无字段」）灭绝
+        let errs = errors(
+            "import math from \"std\"\n\nfn f(xs: [float]) -> [int] {\n    return map(xs, math.nope)\n}\n",
+        );
+        assert_eq!(
+            errs.first().and_then(|d| d.code.as_deref()),
+            Some("Y-T0007"),
+            "{errs:#?}"
+        );
+        assert!(
+            !errs
+                .iter()
+                .any(|d| d.message.contains("不能作为值") || d.message.contains("无字段")),
+            "误导性级联复现: {errs:#?}"
+        );
+        // 宿主模块（非注册表）值访问维持原边界：模块不能作为值
+        assert!(
+            !errors("import game from \"host\"\n\nfn f() {\n    let x = game.thing\n}\n")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn module_field_probe_emits_single_undefined() {
+        // 决策 78 配套：Field 分支探针走 lookup_opt（无诊断副作用），
+        // 未定义模块名只经 check_expr 单次发射——修复前同 span 双 Y-T0001。
+        // （合法派生诊断仍可出现，只锁「未定义名称」不重复。）
+        let errs = errors("fn f(xs: [float]) -> [int] {\n    return map(xs, math.floor)\n}\n");
+        let undefined: Vec<_> = errs
+            .iter()
+            .filter(|d| d.code.as_deref() == Some("Y-T0001"))
+            .collect();
+        assert_eq!(undefined.len(), 1, "同 span 双发射回归: {errs:#?}");
+    }
+
+    #[test]
+    fn duplicate_diagnostics_suppressed() {
+        // 级联抑制（rustc 同款）：精确重复（同码+同 span+同 message）只留首条。
+        // 探针实证：`[any]` 作返回类型 + 局部标注时曾双发射「未知类型 any」。
+        let errs = errors("fn f() -> [any] {\n    let fs: [any] = []\n    return fs\n}\n");
+        let n = errs
+            .iter()
+            .filter(|d| d.message.contains("未知类型 `any`"))
+            .count();
+        assert_eq!(n, 1, "精确重复诊断应被抑制: {errs:#?}");
+    }
+
+    #[test]
+    fn soft_types_never_user_writable() {
+        // G3 反面锚（GDScript 渐进类型半成品教训，23-T2 §7）：Num/Coll/Any
+        // 仅存于内建注册表面（same() 成员集判定），用户标注一律拒绝——
+        // 「内建面专用类型外溢之日，即半成品类型系统之始」。
+        for t in ["Num", "Coll", "Any", "any"] {
+            let src = format!("fn f(x: {t}) -> int {{\n    return 0\n}}\n");
+            assert!(!errors(&src).is_empty(), "`{t}` 必须不可用户书写");
+        }
     }
 }

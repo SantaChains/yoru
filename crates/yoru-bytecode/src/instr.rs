@@ -82,6 +82,11 @@ pub enum Opcode {
     Resume = 0x63,
     CallHost = 0x64,
     Raise = 0x65,
+    /// 局部变量下标赋值：弹 (值, 索引)，对 `locals[arg]` 原地变异。
+    /// 快路径（T2b 基准发现）：base 为局部变量时绕开栈操作数与局部槽的
+    /// 双重引用，使决策 13 的 `refcount==1` 互斥判定真正可观测——
+    /// 否则局部数组每次下标赋值都触发 O(n) 整表拷贝。
+    SetIndexLocal = 0x66,
     // 0x70-0x7F 阶段 2 扩展（见模块注释）
     ToString = 0x70,
     ForPrep = 0x71,
@@ -150,6 +155,7 @@ impl Opcode {
             0x63 => Opcode::Resume,
             0x64 => Opcode::CallHost,
             0x65 => Opcode::Raise,
+            0x66 => Opcode::SetIndexLocal,
             0x70 => Opcode::ToString,
             0x71 => Opcode::ForPrep,
             0x72 => Opcode::ForNext,
@@ -185,6 +191,7 @@ impl Opcode {
             | Opcode::CallMethod
             | Opcode::TailCall
             | Opcode::CallHost
+            | Opcode::SetIndexLocal
             | Opcode::ForPrep
             | Opcode::ForNext
             | Opcode::IsTag
@@ -251,7 +258,10 @@ impl Instr {
         let arg = word >> 8;
         // S24 形态操作数不得超出 i24 值域
         if op.operand_kind() == OperandKind::S24 && arg & 0x0080_0000 == 0 && arg > 0x007F_FFFF {
-            return Err(VerifyError::BadOpcode { pc, opcode: word & 0xFF });
+            return Err(VerifyError::BadOpcode {
+                pc,
+                opcode: word & 0xFF,
+            });
         }
         Ok(Instr { op, arg })
     }
@@ -275,7 +285,7 @@ mod tests {
 
     #[test]
     fn reserved_opcode_rejected() {
-        assert!(Instr::decode(0x66, 0).is_err()); // 0x66 未分配
+        assert!(Instr::decode(0x67, 0).is_err()); // 0x67 未分配（0x66 = SetIndexLocal）
         assert!(Instr::decode(0xC0, 0).is_err());
     }
 

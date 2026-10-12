@@ -1,6 +1,6 @@
 //! 临时调试：运行文件并打印结果/错误。
 use yoru_syntax::parse_source;
-use yoru_vm::{demo, Instance, Vm};
+use yoru_vm::{Instance, Vm, demo};
 
 fn main() {
     let path = std::env::args().nth(1).expect("usage");

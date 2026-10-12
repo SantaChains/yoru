@@ -7,9 +7,9 @@
 
 use std::collections::HashMap;
 
+use yoru_stdlib::{Builtin, Param};
 use yoru_syntax::ast::{self, Type, TypeBody};
 use yoru_syntax::{Diagnostic, Severity, Span};
-use yoru_stdlib::{Builtin, Param};
 
 use crate::ty::Ty;
 
@@ -24,12 +24,36 @@ pub struct BuiltinProtocol {
 }
 
 pub const BUILTIN_PROTOCOLS: &[BuiltinProtocol] = &[
-    BuiltinProtocol { name: "Add", method: "add", n_params: 2 },
-    BuiltinProtocol { name: "Sub", method: "sub", n_params: 2 },
-    BuiltinProtocol { name: "Mul", method: "mul", n_params: 2 },
-    BuiltinProtocol { name: "Div", method: "div", n_params: 2 },
-    BuiltinProtocol { name: "Ord", method: "cmp", n_params: 2 },
-    BuiltinProtocol { name: "Hash", method: "hash", n_params: 1 },
+    BuiltinProtocol {
+        name: "Add",
+        method: "add",
+        n_params: 2,
+    },
+    BuiltinProtocol {
+        name: "Sub",
+        method: "sub",
+        n_params: 2,
+    },
+    BuiltinProtocol {
+        name: "Mul",
+        method: "mul",
+        n_params: 2,
+    },
+    BuiltinProtocol {
+        name: "Div",
+        method: "div",
+        n_params: 2,
+    },
+    BuiltinProtocol {
+        name: "Ord",
+        method: "cmp",
+        n_params: 2,
+    },
+    BuiltinProtocol {
+        name: "Hash",
+        method: "hash",
+        n_params: 1,
+    },
 ];
 
 /// 内置环境：stdlib 模块、自由函数、演示宿主类型。
@@ -64,7 +88,11 @@ impl Env {
         let mut modules = HashMap::new();
         modules.insert("std".into(), std_mods);
 
-        Env { modules, free_fns, host_types: HashMap::new() }
+        Env {
+            modules,
+            free_fns,
+            host_types: HashMap::new(),
+        }
     }
 
     /// 演示宿主面（19.5 权威样例所需）：`Ctx` / `Item` 宿主类型。
@@ -72,8 +100,10 @@ impl Env {
     /// 决策 73），不再经 demo 注入——三面（typeck/lower/VM）以注册表对齐。
     /// 真实宿主面（12.2 契约）在阶段 4 由注册表注入。
     pub fn with_demo_host(mut self) -> Env {
-        self.host_types.insert("Ctx".into(), Ty::named("Ctx", vec![]));
-        self.host_types.insert("Item".into(), Ty::named("Item", vec![]));
+        self.host_types
+            .insert("Ctx".into(), Ty::named("Ctx", vec![]));
+        self.host_types
+            .insert("Item".into(), Ty::named("Item", vec![]));
         self
     }
 
@@ -120,14 +150,13 @@ fn param_ty(p: &Param) -> Ty {
         Param::Rune => Ty::Rune,
         Param::Any => Ty::Any,
         Param::List(e) => Ty::list(param_ty(&e[0])),
-        Param::MapKV(k, v) => {
-            Ty::Map(Box::new(Ty::Generic((*k).into())), Box::new(Ty::Generic((*v).into())))
-        }
+        Param::MapKV(k, v) => Ty::Map(
+            Box::new(Ty::Generic((*k).into())),
+            Box::new(Ty::Generic((*v).into())),
+        ),
         Param::Range => Ty::Range,
         Param::Collection => Ty::Coll,
-        Param::Fn(ps, r) => {
-            Ty::Fn(ps.iter().map(param_ty).collect(), Box::new(param_ty(&r[0])))
-        }
+        Param::Fn(ps, r) => Ty::Fn(ps.iter().map(param_ty).collect(), Box::new(param_ty(&r[0]))),
         Param::Var(n) => Ty::Generic((*n).into()),
         Param::Opt(inner) => Ty::opt(param_ty(&inner[0])),
     }
@@ -135,7 +164,10 @@ fn param_ty(p: &Param) -> Ty {
 
 /// 内建完整签名面（自由函数值与模块函数值两用）。
 pub fn builtin_face(b: &Builtin) -> Ty {
-    Ty::Fn(b.params.iter().map(param_ty).collect(), Box::new(param_ty(&b.ret)))
+    Ty::Fn(
+        b.params.iter().map(param_ty).collect(),
+        Box::new(param_ty(&b.ret)),
+    )
 }
 
 /// `param_ty` 的 crate 内可见包装（check.rs 的内建调用路径用）。
@@ -147,10 +179,21 @@ pub(crate) fn param_ty_pub(p: &Param) -> Ty {
 
 #[derive(Clone)]
 pub enum TypeKind {
-    Struct { params: Vec<String>, fields: Vec<(String, Type)> },
-    Tag { params: Vec<String>, variants: Vec<(String, Option<Type>)> },
-    Alias { params: Vec<String>, body: Type },
-    Distinct { base: Type },
+    Struct {
+        params: Vec<String>,
+        fields: Vec<(String, Type)>,
+    },
+    Tag {
+        params: Vec<String>,
+        variants: Vec<(String, Option<Type>)>,
+    },
+    Alias {
+        params: Vec<String>,
+        body: Type,
+    },
+    Distinct {
+        base: Type,
+    },
 }
 
 #[derive(Clone)]
@@ -196,8 +239,7 @@ impl DeclTable {
             match &decl.kind {
                 ast::DeclKind::Import { name, alias, path } => {
                     let bind = alias.clone().unwrap_or_else(|| name.clone());
-                    if t
-                        .imports
+                    if t.imports
                         .insert(bind.clone(), (path.clone(), name.clone(), decl.span))
                         .is_some()
                     {
@@ -206,17 +248,16 @@ impl DeclTable {
                 }
                 ast::DeclKind::Type { name, params, body } => {
                     let kind = match body {
-                        TypeBody::Alias(ty) => {
-                            TypeKind::Alias { params: params.clone(), body: ty.clone() }
-                        }
+                        TypeBody::Alias(ty) => TypeKind::Alias {
+                            params: params.clone(),
+                            body: ty.clone(),
+                        },
                         TypeBody::Distinct(ty) => TypeKind::Distinct { base: ty.clone() },
                         TypeBody::Union(vs) => TypeKind::Tag {
                             params: params.clone(),
                             variants: vs
                                 .iter()
-                                .map(|v| {
-                                    (v.name.clone(), v.payload.clone())
-                                })
+                                .map(|v| (v.name.clone(), v.payload.clone()))
                                 .collect(),
                         },
                     };
@@ -229,12 +270,14 @@ impl DeclTable {
                         return Err(err_dup(name, decl.span));
                     }
                 }
-                ast::DeclKind::Tag { name, params, variants } => {
+                ast::DeclKind::Tag {
+                    name,
+                    params,
+                    variants,
+                } => {
                     for v in variants {
-                        t.variants.insert(
-                            v.name.clone(),
-                            (name.clone(), v.payload.clone()),
-                        );
+                        t.variants
+                            .insert(v.name.clone(), (name.clone(), v.payload.clone()));
                     }
                     if t.types
                         .insert(
@@ -243,12 +286,7 @@ impl DeclTable {
                                 params: params.clone(),
                                 variants: variants
                                     .iter()
-                                    .map(|v| {
-                                        (
-                                            v.name.clone(),
-                                            v.payload.clone(),
-                                        )
-                                    })
+                                    .map(|v| (v.name.clone(), v.payload.clone()))
                                     .collect(),
                             },
                         )
@@ -257,7 +295,11 @@ impl DeclTable {
                         return Err(err_dup(name, decl.span));
                     }
                 }
-                ast::DeclKind::Struct { name, params, fields } => {
+                ast::DeclKind::Struct {
+                    name,
+                    params,
+                    fields,
+                } => {
                     if t.types
                         .insert(
                             name.clone(),
@@ -285,11 +327,19 @@ impl DeclTable {
                             )
                         })
                         .collect();
-                    if t.protocols.insert(name.clone(), (params.clone(), sigs)).is_some() {
+                    if t.protocols
+                        .insert(name.clone(), (params.clone(), sigs))
+                        .is_some()
+                    {
                         return Err(err_dup(name, decl.span));
                     }
                 }
-                ast::DeclKind::Impl { proto, for_, params, fns } => {
+                ast::DeclKind::Impl {
+                    proto,
+                    for_,
+                    params,
+                    fns,
+                } => {
                     let methods = fns
                         .iter()
                         .map(|f| FnInfo {
@@ -312,8 +362,7 @@ impl DeclTable {
                     });
                 }
                 ast::DeclKind::Const { name, ty, value } => {
-                    if t
-                        .consts
+                    if t.consts
                         .insert(name.clone(), (ty.clone(), Some(value.clone()), decl.span))
                         .is_some()
                     {
@@ -323,7 +372,11 @@ impl DeclTable {
                 ast::DeclKind::Fn(f) => {
                     let info = FnInfo {
                         name: f.name.clone(),
-                        params: f.params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
+                        params: f
+                            .params
+                            .iter()
+                            .map(|p| (p.name.clone(), p.ty.clone()))
+                            .collect(),
                         ret: f.ret.clone(),
                         span: f.span,
                     };
@@ -373,8 +426,10 @@ impl<'a> Resolver<'a> {
                 if let Some(t) = self.subst.get(n) {
                     return Ok(t.clone());
                 }
-                let rargs: Vec<Ty> =
-                    args.iter().map(|a| self.resolve(a)).collect::<Result<_, _>>()?;
+                let rargs: Vec<Ty> = args
+                    .iter()
+                    .map(|a| self.resolve(a))
+                    .collect::<Result<_, _>>()?;
                 // 内建泛型的括号式拼写（19.5 示例形态）：Result[T, E] / Option[T]
                 if n == "Result" {
                     if rargs.len() != 2 {
@@ -400,11 +455,7 @@ impl<'a> Resolver<'a> {
                         let r2 = Resolver {
                             decls: self.decls,
                             env: self.env,
-                            subst: params
-                                .iter()
-                                .cloned()
-                                .zip(rargs.iter().cloned())
-                                .collect(),
+                            subst: params.iter().cloned().zip(rargs.iter().cloned()).collect(),
                         };
                         return r2.resolve(body);
                     }
@@ -419,11 +470,17 @@ impl<'a> Resolver<'a> {
                                 return Err(arity_err(n, kp.len(), rargs.len(), span));
                             }
                         }
-                        Ty::Named { name: n.clone(), args: rargs }
+                        Ty::Named {
+                            name: n.clone(),
+                            args: rargs,
+                        }
                     }
                     None => {
                         if self.env.host_types.contains_key(n) {
-                            Ty::Named { name: n.clone(), args: rargs }
+                            Ty::Named {
+                                name: n.clone(),
+                                args: rargs,
+                            }
                         } else {
                             return Err(Diagnostic::coded(
                                 "Y-T0007",
@@ -457,7 +514,9 @@ impl<'a> Resolver<'a> {
                 Ty::Map(Box::new(kt), Box::new(self.resolve(v)?))
             }
             Type::Fn(ps, r) => Ty::Fn(
-                ps.iter().map(|p| self.resolve(p)).collect::<Result<_, _>>()?,
+                ps.iter()
+                    .map(|p| self.resolve(p))
+                    .collect::<Result<_, _>>()?,
                 Box::new(self.resolve(r)?),
             ),
             Type::Distinct(_) => {
@@ -466,7 +525,7 @@ impl<'a> Resolver<'a> {
                     Severity::Error,
                     "`distinct` 只能出现在 type 别名声明中",
                     span,
-                ))
+                ));
             }
         })
     }
@@ -474,7 +533,10 @@ impl<'a> Resolver<'a> {
     /// Map 键约束：Hash + Ord（决策 30）。内置键型直接放行，命名类型查 impl。
     fn check_map_key(&self, kt: &Ty, span: Span) -> Result<(), Diagnostic> {
         let has_impl = |proto: &str, name: &str| {
-            self.decls.impls.iter().any(|i| i.proto == proto && i.for_ == name)
+            self.decls
+                .impls
+                .iter()
+                .any(|i| i.proto == proto && i.for_ == name)
         };
         match kt {
             Ty::Str | Ty::Int | Ty::Rune | Ty::Bool => Ok(()),

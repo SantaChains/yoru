@@ -21,7 +21,10 @@ pub enum Ty {
     /// nil 字面量（可赋给任意 `T?`，决策 27 的反向入口）
     Nil,
     /// 用户命名类型：struct / tag / alias / distinct（kind 查 decl 表）
-    Named { name: String, args: Vec<Ty> },
+    Named {
+        name: String,
+        args: Vec<Ty>,
+    },
     Opt(Box<Ty>),
     Res(Box<Ty>, Box<Ty>),
     List(Box<Ty>),
@@ -54,7 +57,10 @@ impl Ty {
         Ty::List(Box::new(elem))
     }
     pub fn named(name: &str, args: Vec<Ty>) -> Ty {
-        Ty::Named { name: name.into(), args }
+        Ty::Named {
+            name: name.into(),
+            args,
+        }
     }
 
     /// 结构相等（泛型参数位不参与——unify 前置）。
@@ -75,9 +81,7 @@ impl Ty {
             (Ty::List(a), Ty::List(b)) => a.same(b),
             (Ty::Map(ak, av), Ty::Map(bk, bv)) => ak.same(bk) && av.same(bv),
             (Ty::Fn(ap, ar), Ty::Fn(bp, br)) => {
-                ap.len() == bp.len()
-                    && ar.same(br)
-                    && ap.iter().zip(bp).all(|(p, q)| p.same(q))
+                ap.len() == bp.len() && ar.same(br) && ap.iter().zip(bp).all(|(p, q)| p.same(q))
             }
             _ => self == other,
         }

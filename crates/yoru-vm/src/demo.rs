@@ -34,11 +34,16 @@ pub fn demo_ctx() -> Value {
         Rc::new(|vm: &mut Vm, args: &[Value]| {
             vm.emit_line(args);
             Ok(Value::Nil)
-        }) as HostFn,
+        }),
     )])
 }
 
 /// 为实例安装 demo 宿主 import 面（模块里 import 什么就绑什么）。
+///
+/// **D4 清理（决策 78）**：std 模块（math/string/json）的 import 不绑定——
+/// 其成员在 typeck/lower 两位置均已归一为 bare 名分派（决策 77/78），
+/// LoadImport+GetField 对 std 永不被发射，空模块绑定是死机制。
+/// 仅非 std import（宿主模块面）走 `demo_import` 绑定。
 pub fn install_demo_host(inst: &mut Instance) {
     let names: Vec<String> = inst
         .module()
@@ -47,7 +52,14 @@ pub fn install_demo_host(inst: &mut Instance) {
         .filter_map(|&s| inst.module().strings.get(s as usize).cloned())
         .collect();
     for name in names {
+        if is_std_module(&name) {
+            continue; // std import 的运行期零足迹是决策 77/78 的设计结果，非遗漏
+        }
         let _ = inst.set_import(&name, demo_import(&name));
     }
 }
 
+/// 名字是否为 std 模块（注册表中带 `module` 字段的内建所属模块）。
+fn is_std_module(name: &str) -> bool {
+    yoru_stdlib::BUILTINS.iter().any(|b| b.module == Some(name))
+}

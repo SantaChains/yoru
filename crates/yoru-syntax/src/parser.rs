@@ -123,16 +123,12 @@ impl Parser {
 
     fn error_current(&mut self, msg: impl Into<String>) {
         let t = self.peek().clone();
-        self.diagnostics
-            .push(Diagnostic::error(msg, t.span));
+        self.diagnostics.push(Diagnostic::error(msg, t.span));
     }
 
     /// 语句级错误恢复：跳到下一个 Newline 或 `}`（不消费 `}`）。
     fn recover_stmt(&mut self) {
-        while !matches!(
-            self.peek().kind,
-            TokenKind::Newline | TokenKind::RBrace
-        ) {
+        while !matches!(self.peek().kind, TokenKind::Newline | TokenKind::RBrace) {
             if self.pos >= self.tokens.len() - 1 {
                 return;
             }
@@ -194,7 +190,16 @@ impl Parser {
                 return None;
             }
         };
-        if pub_ && !matches!(kind, DeclKind::Fn(_) | DeclKind::Struct { .. } | DeclKind::Tag { .. } | DeclKind::Type { .. } | DeclKind::Const { .. }) {
+        if pub_
+            && !matches!(
+                kind,
+                DeclKind::Fn(_)
+                    | DeclKind::Struct { .. }
+                    | DeclKind::Tag { .. }
+                    | DeclKind::Type { .. }
+                    | DeclKind::Const { .. }
+            )
+        {
             self.error_current("`pub` is not allowed on this declaration");
         }
         let span = start.merge(self.peek().span);
@@ -205,7 +210,13 @@ impl Parser {
         self.bump(); // import
         let name = match self.expect_ident("module name") {
             Ok(n) => n,
-            Err(_) => return DeclKind::Import { name: String::new(), alias: None, path: String::new() },
+            Err(_) => {
+                return DeclKind::Import {
+                    name: String::new(),
+                    alias: None,
+                    path: String::new(),
+                };
+            }
         };
         let alias = if self.at(&TokenKind::As) {
             self.bump();
@@ -216,7 +227,11 @@ impl Parser {
         // `from` 是软关键字（不在 27 个冻结关键字内）
         if !matches!(&self.peek().kind, TokenKind::Ident(w) if w == "from") {
             self.error_current("expected `from` in import declaration");
-            return DeclKind::Import { name, alias, path: String::new() };
+            return DeclKind::Import {
+                name,
+                alias,
+                path: String::new(),
+            };
         }
         self.bump();
         let path = match self.peek().kind.clone() {
@@ -226,12 +241,10 @@ impl Parser {
             }
             other => {
                 let t = self.peek().clone();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        format!("expected module path string, found {}", other.describe()),
-                        t.span,
-                    ),
-                );
+                self.diagnostics.push(Diagnostic::error(
+                    format!("expected module path string, found {}", other.describe()),
+                    t.span,
+                ));
                 String::new()
             }
         };
@@ -246,12 +259,10 @@ impl Parser {
             }
             other => {
                 let t = self.peek().clone();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        format!("expected {what}, found {}", other.describe()),
-                        t.span,
-                    ),
-                );
+                self.diagnostics.push(Diagnostic::error(
+                    format!("expected {what}, found {}", other.describe()),
+                    t.span,
+                ));
                 Err(())
             }
         }
@@ -293,11 +304,19 @@ impl Parser {
         let name = self.expect_ident("type name").unwrap_or_default();
         let params = self.parse_type_params();
         if self.expect(&TokenKind::Assign, "`=`").is_err() {
-            return DeclKind::Type { name, params, body: TypeBody::Alias(Type::Unit) };
+            return DeclKind::Type {
+                name,
+                params,
+                body: TypeBody::Alias(Type::Unit),
+            };
         }
         if self.eat(&TokenKind::Distinct) {
             let ty = self.parse_type();
-            return DeclKind::Type { name, params, body: TypeBody::Distinct(ty) };
+            return DeclKind::Type {
+                name,
+                params,
+                body: TypeBody::Distinct(ty),
+            };
         }
         // tag 联合：`Node(Node2[T]) | Leaf`（19.5；变体 = ident [ `(` type `)` ]）
         if let TokenKind::Ident(_) = self.peek().kind {
@@ -325,9 +344,17 @@ impl Parser {
                     } else {
                         None
                     };
-                    variants.push(Variant { name: vn, payload: pl, span: Span::new(0, 0) });
+                    variants.push(Variant {
+                        name: vn,
+                        payload: pl,
+                        span: Span::new(0, 0),
+                    });
                 }
-                return DeclKind::Type { name, params, body: TypeBody::Union(variants) };
+                return DeclKind::Type {
+                    name,
+                    params,
+                    body: TypeBody::Union(variants),
+                };
             }
             // 单 ident 且无 `(` 无 `|` → 普通别名，回退统一走 type 文法
             if payload.is_none() {
@@ -345,7 +372,11 @@ impl Parser {
             }
         }
         let ty = self.parse_type();
-        DeclKind::Type { name, params, body: TypeBody::Alias(ty) }
+        DeclKind::Type {
+            name,
+            params,
+            body: TypeBody::Alias(ty),
+        }
     }
 
     fn parse_tag_decl(&mut self) -> DeclKind {
@@ -364,12 +395,20 @@ impl Parser {
             } else {
                 None
             };
-            variants.push(Variant { name: vn, payload, span: vstart });
+            variants.push(Variant {
+                name: vn,
+                payload,
+                span: vstart,
+            });
             if !self.eat(&TokenKind::Pipe) {
                 break;
             }
         }
-        DeclKind::Tag { name, params, variants }
+        DeclKind::Tag {
+            name,
+            params,
+            variants,
+        }
     }
 
     fn parse_struct_decl(&mut self) -> Option<DeclKind> {
@@ -385,7 +424,8 @@ impl Parser {
             }
             let fstart = self.peek().span;
             let fname = self.expect_ident("field name").ok()?;
-            self.expect(&TokenKind::Colon, "`:` after field name").ok()?;
+            self.expect(&TokenKind::Colon, "`:` after field name")
+                .ok()?;
             let ty = self.parse_type();
             fields.push(Field {
                 name: fname,
@@ -395,7 +435,11 @@ impl Parser {
             // 字段由换行分隔（19.2 struct_decl）；行尾逗号容错
             self.eat(&TokenKind::Comma);
         }
-        Some(DeclKind::Struct { name, params, fields })
+        Some(DeclKind::Struct {
+            name,
+            params,
+            fields,
+        })
     }
 
     fn parse_protocol_decl(&mut self) -> Option<DeclKind> {
@@ -411,9 +455,10 @@ impl Parser {
             }
             if self.at_eof() {
                 let t = self.peek().clone();
-                self.diagnostics.push(
-                    Diagnostic::error("unclosed protocol body, expected `}`", t.span),
-                );
+                self.diagnostics.push(Diagnostic::error(
+                    "unclosed protocol body, expected `}`",
+                    t.span,
+                ));
                 break;
             }
             if !self.eat(&TokenKind::Fn) {
@@ -456,8 +501,10 @@ impl Parser {
             }
             if self.at_eof() {
                 let t = self.peek().clone();
-                self.diagnostics
-                    .push(Diagnostic::error("unclosed impl body, expected `}`", t.span));
+                self.diagnostics.push(Diagnostic::error(
+                    "unclosed impl body, expected `}`",
+                    t.span,
+                ));
                 break;
             }
             if !self.at(&TokenKind::Fn) {
@@ -467,7 +514,12 @@ impl Parser {
             }
             fns.push(self.parse_fn_decl()?);
         }
-        Some(DeclKind::Impl { proto, for_, params, fns })
+        Some(DeclKind::Impl {
+            proto,
+            for_,
+            params,
+            fns,
+        })
     }
 
     fn parse_const_decl(&mut self) -> DeclKind {
@@ -491,7 +543,8 @@ impl Parser {
         loop {
             let pstart = self.peek().span;
             let pname = self.expect_ident("parameter name").unwrap_or_default();
-            self.expect(&TokenKind::Colon, "`:` after parameter name").ok();
+            self.expect(&TokenKind::Colon, "`:` after parameter name")
+                .ok();
             let ty = self.parse_type();
             params.push(Param {
                 name: pname,
@@ -641,12 +694,10 @@ impl Parser {
             }
             other => {
                 let t = self.peek().clone();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        format!("expected type, found {}", other.describe()),
-                        t.span,
-                    ),
-                );
+                self.diagnostics.push(Diagnostic::error(
+                    format!("expected type, found {}", other.describe()),
+                    t.span,
+                ));
                 Type::Unit
             }
         }
@@ -669,7 +720,8 @@ impl Parser {
     }
 
     /// 类型实参 `<T, U>`（named 后缀）。
-    fn parse_type_args(&mut self) -> Vec<Type> {        let mut args = Vec::new();
+    fn parse_type_args(&mut self) -> Vec<Type> {
+        let mut args = Vec::new();
         if !self.at(&TokenKind::Lt) {
             return args;
         }
@@ -713,8 +765,10 @@ impl Parser {
             }
             if self.pos >= self.tokens.len() - 1 {
                 let t = self.peek().clone();
-                self.diagnostics
-                    .push(Diagnostic::error("unexpected end of file, expected `}`", t.span));
+                self.diagnostics.push(Diagnostic::error(
+                    "unexpected end of file, expected `}`",
+                    t.span,
+                ));
                 return None;
             }
             let stmt = self.parse_stmt();
@@ -734,7 +788,10 @@ impl Parser {
             let t = self.peek().clone();
             self.diagnostics.push(
                 Diagnostic::error(
-                    format!("expected newline after statement, found {}", t.kind.describe()),
+                    format!(
+                        "expected newline after statement, found {}",
+                        t.kind.describe()
+                    ),
                     t.span,
                 )
                 .with_suggestion("statements are terminated by newline (19.1)"),
@@ -757,7 +814,12 @@ impl Parser {
                 };
                 self.expect(&TokenKind::Assign, "`=` in let binding").ok()?;
                 let value = self.parse_expr();
-                StmtKind::Let { mut_, name, ty, value }
+                StmtKind::Let {
+                    mut_,
+                    name,
+                    ty,
+                    value,
+                }
             }
             TokenKind::While => {
                 self.bump();
@@ -856,7 +918,10 @@ impl Parser {
 
     pub fn parse_expr(&mut self) -> Expr {
         if !self.enter() {
-            return Expr { kind: ExprKind::Int(0), span: self.peek().span };
+            return Expr {
+                kind: ExprKind::Int(0),
+                span: self.peek().span,
+            };
         }
         let e = self.parse_expr_inner();
         self.leave();
@@ -882,16 +947,18 @@ impl Parser {
                 let span = e.span.merge(value.span);
                 return Expr {
                     span,
-                    kind: ExprKind::Assign { target: Box::new(e), op, value: Box::new(value) },
+                    kind: ExprKind::Assign {
+                        target: Box::new(e),
+                        op,
+                        value: Box::new(value),
+                    },
                 };
             }
             let t = self.peek().clone();
-            self.diagnostics.push(
-                Diagnostic::error(
-                    "assignment target must be a variable, field, or index",
-                    t.span,
-                ),
-            );
+            self.diagnostics.push(Diagnostic::error(
+                "assignment target must be a variable, field, or index",
+                t.span,
+            ));
         }
         e
     }
@@ -899,7 +966,9 @@ impl Parser {
     fn parse_or(&mut self) -> Expr {
         let mut lhs = self.parse_range();
         while !self.at_eof() {
-            if !self.wrap_guard() { break; }
+            if !self.wrap_guard() {
+                break;
+            }
             let op = match self.peek().kind.clone() {
                 TokenKind::OrOr => BinOp::Or,
                 TokenKind::Ident(w) if w == "or" => BinOp::Or, // 软关键字
@@ -910,7 +979,11 @@ impl Parser {
             let span = lhs.span.merge(rhs.span);
             lhs = Expr {
                 span,
-                kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) },
+                kind: ExprKind::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
             };
         }
         lhs
@@ -937,7 +1010,9 @@ impl Parser {
     fn parse_and(&mut self) -> Expr {
         let mut lhs = self.parse_pipe();
         while !self.at_eof() {
-            if !self.wrap_guard() { break; }
+            if !self.wrap_guard() {
+                break;
+            }
             let op = match self.peek().kind.clone() {
                 TokenKind::AndAnd => BinOp::And,
                 TokenKind::Ident(w) if w == "and" => BinOp::And, // 软关键字
@@ -948,7 +1023,11 @@ impl Parser {
             let span = lhs.span.merge(rhs.span);
             lhs = Expr {
                 span,
-                kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) },
+                kind: ExprKind::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
             };
         }
         lhs
@@ -957,13 +1036,19 @@ impl Parser {
     fn parse_pipe(&mut self) -> Expr {
         let mut lhs = self.parse_cmp();
         while !self.at_eof() && self.at(&TokenKind::PipeGt) {
-            if !self.wrap_guard() { break; }
+            if !self.wrap_guard() {
+                break;
+            }
             self.bump();
             let rhs = self.parse_cmp();
             let span = lhs.span.merge(rhs.span);
             lhs = Expr {
                 span,
-                kind: ExprKind::Binary { op: BinOp::Pipe, lhs: Box::new(lhs), rhs: Box::new(rhs) },
+                kind: ExprKind::Binary {
+                    op: BinOp::Pipe,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
             };
         }
         lhs
@@ -986,7 +1071,11 @@ impl Parser {
         let span = lhs.span.merge(rhs.span);
         Expr {
             span,
-            kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) },
+            kind: ExprKind::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
         }
     }
 
@@ -1005,7 +1094,9 @@ impl Parser {
     fn parse_shift(&mut self) -> Expr {
         let mut lhs = self.parse_add();
         'outer: while !self.at_eof() {
-            if !self.wrap_guard() { break; }
+            if !self.wrap_guard() {
+                break;
+            }
             for (k, op) in [(TokenKind::Shl, BinOp::Shl), (TokenKind::Shr, BinOp::Shr)] {
                 if self.at(&k) {
                     self.bump();
@@ -1028,10 +1119,7 @@ impl Parser {
     }
 
     fn parse_add(&mut self) -> Expr {
-        self.chain_multi(
-            &[TokenKind::Plus, TokenKind::Minus],
-            Self::parse_mul,
-        )
+        self.chain_multi(&[TokenKind::Plus, TokenKind::Minus], Self::parse_mul)
     }
 
     fn parse_mul(&mut self) -> Expr {
@@ -1044,7 +1132,9 @@ impl Parser {
     fn chain(&mut self, op: BinOp, kinds: &[TokenKind], next: fn(&mut Self) -> Expr) -> Expr {
         let mut lhs = next(self);
         'outer: while !self.at_eof() {
-            if !self.wrap_guard() { break; }
+            if !self.wrap_guard() {
+                break;
+            }
             for k in kinds {
                 if self.at(k) {
                     self.bump();
@@ -1069,7 +1159,9 @@ impl Parser {
     fn chain_multi(&mut self, kinds: &[TokenKind], next: fn(&mut Self) -> Expr) -> Expr {
         let mut lhs = next(self);
         'outer: while !self.at_eof() {
-            if !self.wrap_guard() { break; }
+            if !self.wrap_guard() {
+                break;
+            }
             for k in kinds {
                 if self.at(k) {
                     let op = match k {
@@ -1112,7 +1204,10 @@ impl Parser {
             let span = start.merge(operand.span);
             return Expr {
                 span,
-                kind: ExprKind::Unary { op, operand: Box::new(operand) },
+                kind: ExprKind::Unary {
+                    op,
+                    operand: Box::new(operand),
+                },
             };
         }
         self.parse_postfix()
@@ -1121,7 +1216,9 @@ impl Parser {
     fn parse_postfix(&mut self) -> Expr {
         let mut expr = self.parse_primary();
         loop {
-            if !self.wrap_guard() { break; }
+            if !self.wrap_guard() {
+                break;
+            }
             match self.peek().kind.clone() {
                 TokenKind::LParen => {
                     self.bump();
@@ -1138,7 +1235,10 @@ impl Parser {
                     let span = expr.span.merge(self.peek().span);
                     expr = Expr {
                         span,
-                        kind: ExprKind::Call { callee: Box::new(expr), args },
+                        kind: ExprKind::Call {
+                            callee: Box::new(expr),
+                            args,
+                        },
                     };
                 }
                 TokenKind::Dot => {
@@ -1147,7 +1247,10 @@ impl Parser {
                     let span = expr.span.merge(self.peek().span);
                     expr = Expr {
                         span,
-                        kind: ExprKind::Field { base: Box::new(expr), field },
+                        kind: ExprKind::Field {
+                            base: Box::new(expr),
+                            field,
+                        },
                     };
                 }
                 TokenKind::LBracket => {
@@ -1155,7 +1258,12 @@ impl Parser {
                     let first = self.parse_expr();
                     // `..` 优先级低于下标上下文：`xs[0..2]` 的区间在 parse_expr 层
                     // 已整体成型为 Binary{Range}，此处按形状拆分（决策 42）
-                    let index = if let ExprKind::Binary { op: BinOp::Range, lhs, rhs } = first.kind {
+                    let index = if let ExprKind::Binary {
+                        op: BinOp::Range,
+                        lhs,
+                        rhs,
+                    } = first.kind
+                    {
                         IndexKind::Range(lhs, rhs)
                     } else if self.eat(&TokenKind::DotDot) {
                         // 半开切片：`xs[a..b]`；`xs[a..]` 不合法（终点必填）
@@ -1168,7 +1276,10 @@ impl Parser {
                     let span = expr.span.merge(self.peek().span);
                     expr = Expr {
                         span,
-                        kind: ExprKind::Index { base: Box::new(expr), index },
+                        kind: ExprKind::Index {
+                            base: Box::new(expr),
+                            index,
+                        },
                     };
                 }
                 TokenKind::Bang => {
@@ -1186,7 +1297,10 @@ impl Parser {
                     let span = expr.span.merge(self.peek().span);
                     expr = Expr {
                         span,
-                        kind: ExprKind::Cast { operand: Box::new(expr), ty },
+                        kind: ExprKind::Cast {
+                            operand: Box::new(expr),
+                            ty,
+                        },
                     };
                 }
                 _ => break,
@@ -1316,7 +1430,12 @@ impl Parser {
                             break;
                         }
                     }
-                    ExprKind::StructLit { name, type_args, inits, spread }
+                    ExprKind::StructLit {
+                        name,
+                        type_args,
+                        inits,
+                        spread,
+                    }
                 } else {
                     self.bump();
                     ExprKind::Ident(name)
@@ -1324,12 +1443,10 @@ impl Parser {
             }
             other => {
                 let t = self.peek().clone();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        format!("expected expression, found {}", other.describe()),
-                        t.span,
-                    ),
-                );
+                self.diagnostics.push(Diagnostic::error(
+                    format!("expected expression, found {}", other.describe()),
+                    t.span,
+                ));
                 self.bump();
                 ExprKind::Nil
             }
@@ -1349,7 +1466,10 @@ impl Parser {
                 TokenKind::Gt => {
                     depth -= 1;
                     if depth == 0 {
-                        return matches!(self.tokens.get(i + 1).map(|t| &t.kind), Some(TokenKind::LBrace));
+                        return matches!(
+                            self.tokens.get(i + 1).map(|t| &t.kind),
+                            Some(TokenKind::LBrace)
+                        );
                     }
                 }
                 TokenKind::Newline => return false,
@@ -1389,30 +1509,29 @@ impl Parser {
         let start = self.peek().span;
         self.bump(); // fn
         let mut params = Vec::new();
-        if self.eat(&TokenKind::LParen)
-            && !self.eat(&TokenKind::RParen) {
-                loop {
-                    let pstart = self.peek().span;
-                    let pname = self.expect_ident("parameter name").unwrap_or_default();
-                    let ty = if self.eat(&TokenKind::Colon) {
-                        Some(self.parse_type())
-                    } else {
-                        None
-                    };
-                    params.push(LamParam {
-                        name: pname,
-                        ty,
-                        span: pstart.merge(self.peek().span),
-                    });
-                    if !self.eat(&TokenKind::Comma) {
-                        break;
-                    }
-                    if self.at(&TokenKind::RParen) {
-                        break;
-                    }
+        if self.eat(&TokenKind::LParen) && !self.eat(&TokenKind::RParen) {
+            loop {
+                let pstart = self.peek().span;
+                let pname = self.expect_ident("parameter name").unwrap_or_default();
+                let ty = if self.eat(&TokenKind::Colon) {
+                    Some(self.parse_type())
+                } else {
+                    None
+                };
+                params.push(LamParam {
+                    name: pname,
+                    ty,
+                    span: pstart.merge(self.peek().span),
+                });
+                if !self.eat(&TokenKind::Comma) {
+                    break;
                 }
-                self.expect(&TokenKind::RParen, "`)`").ok();
+                if self.at(&TokenKind::RParen) {
+                    break;
+                }
             }
+            self.expect(&TokenKind::RParen, "`)`").ok();
+        }
         let body = if self.eat(&TokenKind::Assign) {
             FnBody::Expr(self.parse_expr())
         } else {
@@ -1427,7 +1546,10 @@ impl Parser {
         let span = start.merge(self.peek().span);
         Expr {
             span,
-            kind: ExprKind::Lambda { params, body: Box::new(body) },
+            kind: ExprKind::Lambda {
+                params,
+                body: Box::new(body),
+            },
         }
     }
 
@@ -1442,7 +1564,7 @@ impl Parser {
                 return Expr {
                     span: start,
                     kind: ExprKind::Nil,
-                }
+                };
             }
         };
         let else_ = if self.eat(&TokenKind::Else) {
@@ -1463,7 +1585,11 @@ impl Parser {
         let span = start.merge(self.peek().span);
         Expr {
             span,
-            kind: ExprKind::If { cond: Box::new(cond), then_, else_ },
+            kind: ExprKind::If {
+                cond: Box::new(cond),
+                then_,
+                else_,
+            },
         }
     }
 
@@ -1472,7 +1598,10 @@ impl Parser {
         let start = self.peek().span;
         self.bump(); // match
         let scrutinee = self.parse_cond();
-        if self.expect(&TokenKind::LBrace, "`{` to open match arms").is_err() {
+        if self
+            .expect(&TokenKind::LBrace, "`{` to open match arms")
+            .is_err()
+        {
             return Expr {
                 span: start,
                 kind: ExprKind::Nil,
@@ -1516,19 +1645,23 @@ impl Parser {
             self.eat(&TokenKind::Comma);
             if !self.eat(&TokenKind::Newline) && !self.at(&TokenKind::RBrace) {
                 let t = self.peek().clone();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        format!("expected newline after match arm, found {}", t.kind.describe()),
-                        t.span,
+                self.diagnostics.push(Diagnostic::error(
+                    format!(
+                        "expected newline after match arm, found {}",
+                        t.kind.describe()
                     ),
-                );
+                    t.span,
+                ));
                 self.recover_stmt();
             }
         }
         let span = start.merge(self.peek().span);
         Expr {
             span,
-            kind: ExprKind::Match { scrutinee: Box::new(scrutinee), arms },
+            kind: ExprKind::Match {
+                scrutinee: Box::new(scrutinee),
+                arms,
+            },
         }
     }
 
@@ -1573,12 +1706,10 @@ impl Parser {
             }
             other => {
                 let t = self.peek().clone();
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        format!("expected pattern, found {}", other.describe()),
-                        t.span,
-                    ),
-                );
+                self.diagnostics.push(Diagnostic::error(
+                    format!("expected pattern, found {}", other.describe()),
+                    t.span,
+                ));
                 self.bump();
                 Pattern::Wildcard
             }

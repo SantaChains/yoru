@@ -10,7 +10,13 @@ fn const_label(m: &Lbc0Module, idx: u32) -> String {
         Some(Const::Int(v)) => format!("int {v}"),
         Some(Const::Float(v)) => format!("float {v}"),
         Some(Const::Bool(b)) => format!("bool {b}"),
-        Some(Const::Str(i)) => format!("str {:?}", m.strings.get(*i as usize).map(String::as_str).unwrap_or("<oob>")),
+        Some(Const::Str(i)) => format!(
+            "str {:?}",
+            m.strings
+                .get(*i as usize)
+                .map(String::as_str)
+                .unwrap_or("<oob>")
+        ),
         Some(Const::Proto(i)) => format!("proto #{i}"),
         Some(Const::Variant { tag, variant }) => format!("variant tag#{tag}#{variant}"),
         None => "<oob>".to_string(),
@@ -53,11 +59,19 @@ pub fn disassemble(m: &Lbc0Module) -> String {
         m.strings.len()
     ));
     for (i, &imp) in m.imports.iter().enumerate() {
-        let name = m.strings.get(imp as usize).map(String::as_str).unwrap_or("<oob>");
+        let name = m
+            .strings
+            .get(imp as usize)
+            .map(String::as_str)
+            .unwrap_or("<oob>");
         out.push_str(&format!("  import[{i}] = {name}\n"));
     }
     for (ti, t) in m.tags.iter().enumerate() {
-        let name = m.strings.get(t.name as usize).map(String::as_str).unwrap_or("<oob>");
+        let name = m
+            .strings
+            .get(t.name as usize)
+            .map(String::as_str)
+            .unwrap_or("<oob>");
         let variants: Vec<String> = t
             .variants
             .iter()
@@ -67,8 +81,15 @@ pub fn disassemble(m: &Lbc0Module) -> String {
         out.push_str(&format!("  tag[{ti}] {name} = {}\n", variants.join(" | ")));
     }
     for (si, s) in m.structs.iter().enumerate() {
-        let name = m.strings.get(s.name as usize).map(String::as_str).unwrap_or("<oob>");
-        out.push_str(&format!("  struct[{si}] {name} ({} fields)\n", s.fields.len()));
+        let name = m
+            .strings
+            .get(s.name as usize)
+            .map(String::as_str)
+            .unwrap_or("<oob>");
+        out.push_str(&format!(
+            "  struct[{si}] {name} ({} fields)\n",
+            s.fields.len()
+        ));
     }
     out.push('\n');
     for (pi, p) in m.protos.iter().enumerate() {

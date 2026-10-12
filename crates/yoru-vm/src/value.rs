@@ -11,8 +11,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::error::VmError;
 use crate::Vm;
+use crate::error::VmError;
 
 /// 宿主函数（内建/宿主注册统一形态）。
 pub type HostFn = Rc<dyn Fn(&mut Vm, &[Value]) -> Result<Value, VmError>>;
@@ -133,7 +133,9 @@ impl Value {
                 }
                 let (a, b) = (a.borrow(), b.borrow());
                 a.len() == b.len()
-                    && a.iter().zip(b.iter()).all(|(x, y)| x.deep_eq_d(y, depth + 1))
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(x, y)| x.deep_eq_d(y, depth + 1))
             }
             (Value::Map(a), Value::Map(b)) => {
                 if Rc::ptr_eq(a, b) {
@@ -158,9 +160,7 @@ impl Value {
                     && a.fields
                         .iter()
                         .zip(b.fields.iter())
-                        .all(|((f1, v1), (f2, v2))| {
-                            f1 == f2 && v1.deep_eq_d(v2, depth + 1)
-                        })
+                        .all(|((f1, v1), (f2, v2))| f1 == f2 && v1.deep_eq_d(v2, depth + 1))
             }
             (Value::Variant(a), Value::Variant(b)) => {
                 a.tag == b.tag

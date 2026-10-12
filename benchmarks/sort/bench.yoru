@@ -1,0 +1,22 @@
+// 插入排序基线（与 benchmarks/sort/bench.lua 严格同构）：
+// N = 3000 个整数，公式生成 xs[i] = (i * 2654435761) % 100000（Knuth 乘法散列，
+// 双方数据逐位一致），标准移位插入排序，输出 校验和 / 首元素 / 末元素。
+pub fn main() -> int {
+    let n = 3000
+    let mut xs = map(range(n), fn(i: int) = (i * 2654435761) % 100000)
+    for i in range(1, n) {
+        let key = xs[i]
+        let mut j = i - 1
+        while j >= 0 {
+            if xs[j] <= key {
+                break
+            }
+            xs[j + 1] = xs[j]
+            j = j - 1
+        }
+        xs[j + 1] = key
+    }
+    let s = fold(xs, 0, fn(a, b) = a + b)
+    print(s, xs[0], xs[n - 1])
+    return 0
+}

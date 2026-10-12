@@ -8,7 +8,7 @@
 //! - 21 协议显式 impl 校验；23 distinct 不互换；47 break/continue 无标签；
 //! - 43 未使用符号警告；50 顶层纯声明。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use yoru_syntax::ast::{self, BinOp, Expr, ExprKind, Pattern, StmtKind, UnOp};
 use yoru_syntax::{Diagnostic, Severity, Span};
@@ -100,7 +100,29 @@ pub fn check(program: &ast::Program, env: &Env) -> Vec<Diagnostic> {
     c.check_consts();
     c.check_fns();
     c.report_unused_imports();
-    c.diags
+    dedup_diags(c.diags)
+}
+
+/// 级联抑制（rustc error-cascade suppression 同款）：同 code + 同 span +
+/// 同 message 的**精确重复**只留首条。重复发射是诊断实现瑕疵（双路径
+/// 检查同一节点），不是两个错误——重复诊断浪费 AI 修复上下文并双倍
+/// 计数错误数（优先级 #2：AI 错误少）。只去精确重复，不合并不同
+/// span/不同码的合法派生诊断。
+fn dedup_diags(diags: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    let mut seen: HashSet<(Option<String>, usize, usize, String)> = HashSet::new();
+    let mut out = Vec::with_capacity(diags.len());
+    for d in diags {
+        let key = (
+            d.code.clone(),
+            d.span.map(|s| s.start).unwrap_or(usize::MAX),
+            d.span.map(|s| s.end).unwrap_or(usize::MAX),
+            d.message.clone(),
+        );
+        if seen.insert(key) {
+            out.push(d);
+        }
+    }
+    out
 }
 
 /// 收窄事实表：变量名 → 收窄后类型。
@@ -144,7 +166,11 @@ impl<'e> Checker<'e> {
     }
 
     fn resolver(&self) -> Resolver<'_> {
-        Resolver { decls: &self.decls, env: self.env, subst: HashMap::new() }
+        Resolver {
+            decls: &self.decls,
+            env: self.env,
+            subst: HashMap::new(),
+        }
     }
 
     // ===== 顶层 =====
@@ -158,7 +184,11 @@ impl<'e> Checker<'e> {
                 imp.params.iter().map(|p| Ty::Generic(p.clone())).collect(),
             );
             let expected: Vec<(String, Vec<Ty>, Ty)> = if imp.proto == "Ord" {
-                vec![("cmp".into(), vec![self_ty.clone(), self_ty.clone()], Ty::Int)]
+                vec![(
+                    "cmp".into(),
+                    vec![self_ty.clone(), self_ty.clone()],
+                    Ty::Int,
+                )]
             } else if imp.proto == "Hash" {
                 vec![("hash".into(), vec![self_ty.clone()], Ty::Int)]
             } else if let Some(bp) = BUILTIN_PROTOCOLS.iter().find(|p| p.name == imp.proto) {
@@ -173,11 +203,17 @@ impl<'e> Checker<'e> {
                     .cloned()
                     .zip(std::iter::repeat(self_ty.clone()))
                     .collect();
-                let r = Resolver { decls: &self.decls, env: self.env, subst };
+                let r = Resolver {
+                    decls: &self.decls,
+                    env: self.env,
+                    subst,
+                };
                 sigs.iter()
                     .map(|(fname, ps, ret)| {
-                        let rps: Vec<Ty> =
-                            ps.iter().map(|p| r.resolve(p).unwrap_or(Ty::Unit)).collect();
+                        let rps: Vec<Ty> = ps
+                            .iter()
+                            .map(|p| r.resolve(p).unwrap_or(Ty::Unit))
+                            .collect();
                         let rret = ret
                             .as_ref()
                             .map(|t| r.resolve(t).unwrap_or(Ty::Unit))
@@ -186,13 +222,15 @@ impl<'e> Checker<'e> {
                     })
                     .collect()
             } else {
-                self.err(d(
-                    "Y-T0007",
-                    Severity::Error,
-                    format!("未知协议 `{}`", imp.proto),
-                    imp.span,
-                )
-                .with_suggestion("内置协议：Add/Sub/Mul/Div/Ord/Hash；自定义协议先声明"));
+                self.err(
+                    d(
+                        "Y-T0007",
+                        Severity::Error,
+                        format!("未知协议 `{}`", imp.proto),
+                        imp.span,
+                    )
+                    .with_suggestion("内置协议：Add/Sub/Mul/Div/Ord/Hash；自定义协议先声明"),
+                );
                 continue;
             };
             for (mname, formal, ret) in &expected {
@@ -272,16 +310,18 @@ impl<'e> Checker<'e> {
             }
             for m in &imp.methods {
                 if !expected.iter().any(|(n, _, _)| n == &m.name) {
-                    self.err(d(
-                        "Y-T0009",
-                        Severity::Error,
-                        format!(
-                            "`impl {} for {}` 实现了协议没有的方法 `{}`",
-                            imp.proto, imp.for_, m.name
-                        ),
-                        m.span,
-                    )
-                    .with_suggestion("协议方法集 = impl 方法集（一操作一形式）"));
+                    self.err(
+                        d(
+                            "Y-T0009",
+                            Severity::Error,
+                            format!(
+                                "`impl {} for {}` 实现了协议没有的方法 `{}`",
+                                imp.proto, imp.for_, m.name
+                            ),
+                            m.span,
+                        )
+                        .with_suggestion("协议方法集 = impl 方法集（一操作一形式）"),
+                    );
                 }
             }
         }
@@ -295,7 +335,12 @@ impl<'e> Checker<'e> {
             .iter()
             .map(|(name, (ty, value, span))| {
                 let r = self.resolver();
-                (name.clone(), r.resolve(ty).unwrap_or(Ty::Unit), value.clone(), *span)
+                (
+                    name.clone(),
+                    r.resolve(ty).unwrap_or(Ty::Unit),
+                    value.clone(),
+                    *span,
+                )
             })
             .collect();
         for (_name, ty, value, _span) in consts {
@@ -313,11 +358,22 @@ impl<'e> Checker<'e> {
         let program = self.program;
         for decl in &program.decls {
             match &decl.kind {
-                ast::DeclKind::Fn(f) => self.check_fn(f.params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(), &f.ret, Some(&f.body), f.span),
+                ast::DeclKind::Fn(f) => self.check_fn(
+                    f.params
+                        .iter()
+                        .map(|p| (p.name.clone(), p.ty.clone()))
+                        .collect(),
+                    &f.ret,
+                    Some(&f.body),
+                    f.span,
+                ),
                 ast::DeclKind::Impl { fns, .. } => {
                     for f in fns {
                         self.check_fn(
-                            f.params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
+                            f.params
+                                .iter()
+                                .map(|p| (p.name.clone(), p.ty.clone()))
+                                .collect(),
                             &f.ret,
                             Some(&f.body),
                             f.span,
@@ -342,10 +398,12 @@ impl<'e> Checker<'e> {
         };
         let ptys: Vec<Ty> = resolved
             .into_iter()
-            .map(|x| x.unwrap_or_else(|e| {
-                self.err(e);
-                Ty::Unit
-            }))
+            .map(|x| {
+                x.unwrap_or_else(|e| {
+                    self.err(e);
+                    Ty::Unit
+                })
+            })
             .collect();
         let rty = match ret {
             Some(t) => {
@@ -363,19 +421,25 @@ impl<'e> Checker<'e> {
             for ((pname, _), ty) in params.iter().zip(&ptys) {
                 self.scopes.last_mut().unwrap().vars.insert(
                     pname.clone(),
-                    Binding { ty: ty.clone(), mutable: false, used: false },
+                    Binding {
+                        ty: ty.clone(),
+                        mutable: false,
+                        used: false,
+                    },
                 );
             }
             let terminated = self.check_body(b);
             self.pop_scope();
             if !matches!(rty, Some(Ty::Unit) | None) && !terminated {
-                self.err(d(
-                    "Y-T0016",
-                    Severity::Error,
-                    "函数可能未返回值（return 是唯一返回形式，19.2）",
-                    span,
-                )
-                .with_suggestion("为所有分支补充 return，或将返回类型改为 unit"));
+                self.err(
+                    d(
+                        "Y-T0016",
+                        Severity::Error,
+                        "函数可能未返回值（return 是唯一返回形式，19.2）",
+                        span,
+                    )
+                    .with_suggestion("为所有分支补充 return，或将返回类型改为 unit"),
+                );
             }
             self.fn_ret = None;
         }
@@ -463,7 +527,12 @@ impl<'e> Checker<'e> {
     /// 返回 Some(ty) 仅当语句产出裸表达式值（块值语义用）。
     fn check_stmt(&mut self, stmt: &ast::Stmt, term: &mut Term) -> Option<Ty> {
         match &stmt.kind {
-            StmtKind::Let { mut_, name, ty, value } => {
+            StmtKind::Let {
+                mut_,
+                name,
+                ty,
+                value,
+            } => {
                 let expected = ty.as_ref().map(|t| {
                     let r = self.resolver();
                     r.resolve(t).unwrap_or_else(|e| {
@@ -484,13 +553,15 @@ impl<'e> Checker<'e> {
                     }
                     None => {
                         if matches!(vt, Ty::Nil) {
-                            self.err(d(
-                                "Y-T0013",
-                                Severity::Error,
-                                "nil 初始化无法推断类型（决策 52）",
-                                stmt.span,
-                            )
-                            .with_suggestion("加类型标注：`let x: Item? = nil`"));
+                            self.err(
+                                d(
+                                    "Y-T0013",
+                                    Severity::Error,
+                                    "nil 初始化无法推断类型（决策 52）",
+                                    stmt.span,
+                                )
+                                .with_suggestion("加类型标注：`let x: Item? = nil`"),
+                            );
                             Ty::Unit
                         } else {
                             vt
@@ -500,7 +571,11 @@ impl<'e> Checker<'e> {
                 if name != "_" {
                     self.scopes.last_mut().unwrap().vars.insert(
                         name.clone(),
-                        Binding { ty: bound, mutable: *mut_, used: false },
+                        Binding {
+                            ty: bound,
+                            mutable: *mut_,
+                            used: false,
+                        },
                     );
                 }
                 None
@@ -508,11 +583,17 @@ impl<'e> Checker<'e> {
             StmtKind::Expr(e) => {
                 // if 语句位：流敏感收窄（决策 40）
                 if let ExprKind::If { cond, then_, else_ } = &e.kind {
-                    let (ty, then_term, else_facts) = self.check_if(cond, then_, else_.as_deref(), None, e.span);
+                    let (ty, then_term, else_facts) =
+                        self.check_if(cond, then_, else_.as_deref(), None, e.span);
                     if matches!(ty, Ty::Res(..)) {
                         self.err(
-                            d("W-T0001", Severity::Warning, "Result 值被忽略（决策 34）", e.span)
-                                .with_suggestion("用 `let _ = ...` 显式丢弃，或 `try` 传播错误"),
+                            d(
+                                "W-T0001",
+                                Severity::Warning,
+                                "Result 值被忽略（决策 34）",
+                                e.span,
+                            )
+                            .with_suggestion("用 `let _ = ...` 显式丢弃，或 `try` 传播错误"),
                         );
                     }
                     // then 分支终止 → else 事实在延续中成立
@@ -526,8 +607,13 @@ impl<'e> Checker<'e> {
                 let t = self.check_expr(e, None);
                 if matches!(t, Ty::Res(..)) {
                     self.err(
-                        d("W-T0001", Severity::Warning, "Result 值被忽略（决策 34）", e.span)
-                            .with_suggestion("用 `let _ = ...` 显式丢弃，或 `try` 传播错误"),
+                        d(
+                            "W-T0001",
+                            Severity::Warning,
+                            "Result 值被忽略（决策 34）",
+                            e.span,
+                        )
+                        .with_suggestion("用 `let _ = ...` 显式丢弃，或 `try` 传播错误"),
                     );
                 }
                 Some(t)
@@ -548,7 +634,7 @@ impl<'e> Checker<'e> {
                 let it = self.check_expr(iter, None);
                 let vty = match &it {
                     Ty::List(t) => (**t).clone(),
-                    Ty::Str => Ty::Rune, // 决策 46：按码点迭代
+                    Ty::Str => Ty::Rune,  // 决策 46：按码点迭代
                     Ty::Range => Ty::Int, // 决策 77：range 产物迭代为 int（VM ForPrep 同构）
                     other => {
                         let s = iter.span;
@@ -567,7 +653,11 @@ impl<'e> Checker<'e> {
                 self.scopes.push(Scope::default());
                 self.scopes.last_mut().unwrap().vars.insert(
                     var.clone(),
-                    Binding { ty: vty, mutable: false, used: true }, // for 变量不参与未使用警告
+                    Binding {
+                        ty: vty,
+                        mutable: false,
+                        used: true,
+                    }, // for 变量不参与未使用警告
                 );
                 self.loop_depth += 1;
                 let mut inner = Term::No;
@@ -620,7 +710,12 @@ impl<'e> Checker<'e> {
                         ));
                     }
                     None => {
-                        self.err(d("Y-T0032", Severity::Error, "throw 需要函数返回 Result", stmt.span));
+                        self.err(d(
+                            "Y-T0032",
+                            Severity::Error,
+                            "throw 需要函数返回 Result",
+                            stmt.span,
+                        ));
                     }
                 }
                 *term = Term::Throw;
@@ -652,9 +747,20 @@ impl<'e> Checker<'e> {
     /// 仅处理单比较与取反——复合条件不收窄（保守，无假收窄）。
     fn narrow_facts(&self, cond: &Expr) -> (Facts, Facts) {
         let (lhs, rhs, is_eq) = match &cond.kind {
-            ExprKind::Binary { op: BinOp::Eq, lhs, rhs } => (lhs, rhs, true),
-            ExprKind::Binary { op: BinOp::Ne, lhs, rhs } => (lhs, rhs, false),
-            ExprKind::Unary { op: UnOp::Not, operand } => {
+            ExprKind::Binary {
+                op: BinOp::Eq,
+                lhs,
+                rhs,
+            } => (lhs, rhs, true),
+            ExprKind::Binary {
+                op: BinOp::Ne,
+                lhs,
+                rhs,
+            } => (lhs, rhs, false),
+            ExprKind::Unary {
+                op: UnOp::Not,
+                operand,
+            } => {
                 let (t, e) = self.narrow_facts(operand);
                 return (e, t);
             }
@@ -727,13 +833,10 @@ impl<'e> Checker<'e> {
             }
             None => {
                 if !matches!(expected, None | Some(Ty::Unit)) {
-                    self.err(d(
-                        "Y-T0029",
-                        Severity::Error,
-                        "if 作为值使用必须带 else",
-                        span,
-                    )
-                    .with_suggestion("补全 else 分支，或将 if 改为语句"));
+                    self.err(
+                        d("Y-T0029", Severity::Error, "if 作为值使用必须带 else", span)
+                            .with_suggestion("补全 else 分支，或将 if 改为语句"),
+                    );
                 }
                 (Ty::Unit, false)
             }
@@ -747,11 +850,15 @@ impl<'e> Checker<'e> {
 
     // ===== 名字解析 =====
 
-    fn lookup(&mut self, name: &str, span: Span) -> Resolved {
+    /// 无诊断副作用解析（决策 78 配套）：Field 分支的模块探针专用——
+    /// 未命中/非模块时交回 `check_expr(base)` 单次发射，消除
+    /// 「lookup 发一次 + check_expr 再发一次」的同 span 双诊断。
+    /// 第二返回值 = 变体带载荷裸用的待报义务（发射保留在 `lookup`）。
+    fn lookup_opt(&mut self, name: &str) -> Option<(Resolved, bool)> {
         // 收窄事实优先（决策 40），随后是普通绑定——先取出克隆再标记使用，避免借用冲突
         if let Some(t) = self.find_in_scopes(name) {
             self.mark_used(name);
-            return Resolved::Ty(t);
+            return Some((Resolved::Ty(t), false));
         }
         if let Some(f) = self.decls.fns.get(name) {
             let r = self.resolver();
@@ -765,50 +872,60 @@ impl<'e> Checker<'e> {
                 .as_ref()
                 .map(|t| r.resolve(t).unwrap_or(Ty::Unit))
                 .unwrap_or(Ty::Unit);
-            return Resolved::Ty(Ty::Fn(ps, Box::new(ret)));
+            return Some((Resolved::Ty(Ty::Fn(ps, Box::new(ret))), false));
         }
         if let Some((ty, _, _)) = self.decls.consts.get(name) {
             let r = self.resolver();
             let t = r.resolve(ty).unwrap_or(Ty::Unit);
-            return Resolved::Ty(t);
+            return Some((Resolved::Ty(t), false));
         }
         if let Some((owner, payload)) = self.decls.variants.get(name).cloned() {
-            if payload.is_none() {
-                return Resolved::Ty(Ty::named(&owner, vec![]));
-            }
-            self.err(d(
-                "Y-T0002",
-                Severity::Error,
-                format!("变体 `{name}` 带载荷，需以 `{name}(...)` 构造"),
-                span,
-            ));
-            return Resolved::Ty(Ty::named(&owner, vec![]));
+            return Some((Resolved::Ty(Ty::named(&owner, vec![])), payload.is_some()));
         }
         if let Some((path, module, _)) = self.decls.imports.get(name).cloned() {
             self.used_imports.insert(name.to_string(), true);
             // path 仅校验期用（Checker::new 的模块存在性检查）；函数面查注册表
             // （决策 77），Resolved 只携带模块名。
             let _ = path;
-            return Resolved::Module { module };
+            return Some((Resolved::Module { module }, false));
         }
         if let Some(t) = self.env.host_types.get(name) {
-            return Resolved::Ty(t.clone());
+            return Some((Resolved::Ty(t.clone()), false));
         }
         if let Some(t) = self.env.free_fns.get(name) {
-            return Resolved::Ty(t.clone());
+            return Some((Resolved::Ty(t.clone()), false));
         }
-        let names: Vec<String> = self.visible_names();
-        let mut dg = d(
-            "Y-T0001",
-            Severity::Error,
-            format!("未定义的名称 `{name}`"),
-            span,
-        );
-        if let Some(s) = did_you_mean(name, &names) {
-            dg = dg.with_suggestion(s);
+        None
+    }
+
+    fn lookup(&mut self, name: &str, span: Span) -> Resolved {
+        match self.lookup_opt(name) {
+            Some((r, variant_payload_err)) => {
+                if variant_payload_err {
+                    self.err(d(
+                        "Y-T0002",
+                        Severity::Error,
+                        format!("变体 `{name}` 带载荷，需以 `{name}(...)` 构造"),
+                        span,
+                    ));
+                }
+                r
+            }
+            None => {
+                let names: Vec<String> = self.visible_names();
+                let mut dg = d(
+                    "Y-T0001",
+                    Severity::Error,
+                    format!("未定义的名称 `{name}`"),
+                    span,
+                );
+                if let Some(s) = did_you_mean(name, &names) {
+                    dg = dg.with_suggestion(s);
+                }
+                self.err(dg);
+                Resolved::Ty(Ty::Unit)
+            }
         }
-        self.err(dg);
-        Resolved::Ty(Ty::Unit)
     }
 
     /// 作用域查找：收窄事实优先于普通绑定（决策 40）。
@@ -932,13 +1049,15 @@ impl<'e> Checker<'e> {
                 match (&t, self.fn_ret.clone()) {
                     (Ty::Res(o, err), Some(Ty::Res(_, ferr))) if err.same(&ferr) => (**o).clone(),
                     (Ty::Res(_, err), Some(fr)) => {
-                        self.err(d(
-                            "Y-T0019",
-                            Severity::Error,
-                            format!("try 的错误类型 `{err}` 与函数返回类型 `{fr}` 不一致"),
-                            e.span,
-                        )
-                        .with_suggestion("统一错误类型，或调整函数返回签名"));
+                        self.err(
+                            d(
+                                "Y-T0019",
+                                Severity::Error,
+                                format!("try 的错误类型 `{err}` 与函数返回类型 `{fr}` 不一致"),
+                                e.span,
+                            )
+                            .with_suggestion("统一错误类型，或调整函数返回签名"),
+                        );
                         Ty::Unit
                     }
                     (Ty::Opt(t), Some(Ty::Opt(_))) => (**t).clone(), // 决策 54：nil 传播
@@ -984,9 +1103,7 @@ impl<'e> Checker<'e> {
                         self.err(d(
                             "Y-T0020",
                             Severity::Error,
-                            format!(
-                                "await 仅作用于宿主异步调用结果（14.5），得到 `{other}`"
-                            ),
+                            format!("await 仅作用于宿主异步调用结果（14.5），得到 `{other}`"),
                             e.span,
                         ));
                         Ty::Unit
@@ -1014,8 +1131,42 @@ impl<'e> Checker<'e> {
                 }
             }
             ExprKind::Binary { op, lhs, rhs } => self.check_binary(*op, lhs, rhs, expected, e.span),
-            ExprKind::Call { callee, args } => self.check_call(callee, args, expected, None, e.span),
+            ExprKind::Call { callee, args } => {
+                self.check_call(callee, args, expected, None, e.span)
+            }
             ExprKind::Field { base, field } => {
+                // D1 值位归一（决策 78）：模块限定内建名作值（`map(xs, math.floor)`）
+                // ——与调用位（check_call Field 分支）同一判定：base 是 import 的
+                // std 模块且 field 命中注册表，即得内建函数面，与裸名作值
+                // （`map(xs, floor)`，Const(Str) 一等值）完全同构。lower 侧
+                // module_builtin_ref 两位置归一已就位（决策 77），此处补 typeck
+                // 面，消除「模块不能作为值」→「unit 无字段」级联误诊。
+                if let ExprKind::Ident(n) = &base.kind {
+                    // 探针走 lookup_opt（无诊断副作用）：未命中/非模块时落到
+                    // 下方 check_expr(base) 单次发射——修复前此处先 lookup
+                    // （发 Y-T0001）再 check_expr（再发一次），同 span 双诊断。
+                    if let Some((Resolved::Module { module }, _)) = self.lookup_opt(n) {
+                        if let Some(b) = yoru_stdlib::module_fn(&module, field) {
+                            return crate::env::builtin_face(b);
+                        }
+                        // std 模块面无此函数：与调用位同一诊断（Y-T0007），
+                        // 不再落入「模块不能作为值」的误导性级联。
+                        if yoru_stdlib::BUILTINS
+                            .iter()
+                            .any(|b| b.module == Some(module.as_str()))
+                        {
+                            self.err(d(
+                                "Y-T0007",
+                                Severity::Error,
+                                format!("模块 `{module}` 没有函数 `{field}`"),
+                                e.span,
+                            ));
+                            return Ty::Unit;
+                        }
+                        // 宿主模块（非注册表）：模块值维持原边界，落到
+                        // check_expr(base) 单次发射「模块不能作为值」。
+                    }
+                }
                 let bt = self.check_expr(base, None);
                 self.check_field(bt, field, e.span, base.span)
             }
@@ -1028,15 +1179,17 @@ impl<'e> Checker<'e> {
                 match t {
                     Ty::Opt(inner) => *inner,
                     other => {
-                        self.err(d(
-                            "Y-T0004",
-                            Severity::Error,
-                            format!("`!` 仅可解包 `T?`，得到 `{other}`"),
-                            e.span,
-                        )
-                        .with_suggestion(
-                            "先做 nil 检查获得智能收窄（决策 40），或用 `try` 传播",
-                        ));
+                        self.err(
+                            d(
+                                "Y-T0004",
+                                Severity::Error,
+                                format!("`!` 仅可解包 `T?`，得到 `{other}`"),
+                                e.span,
+                            )
+                            .with_suggestion(
+                                "先做 nil 检查获得智能收窄（决策 40），或用 `try` 传播",
+                            ),
+                        );
                         Ty::Unit
                     }
                 }
@@ -1050,25 +1203,26 @@ impl<'e> Checker<'e> {
                 self.check_cast(&t, &target, e.span);
                 target
             }
-            ExprKind::StructLit { name, type_args, inits, spread } => self.check_struct_lit(
+            ExprKind::StructLit {
                 name,
                 type_args,
                 inits,
-                spread.as_deref(),
-                e.span,
-            ),
+                spread,
+            } => self.check_struct_lit(name, type_args, inits, spread.as_deref(), e.span),
             ExprKind::List(items) => {
                 if items.is_empty() {
                     return match expected {
                         Some(Ty::List(t)) => Ty::list((**t).clone()),
                         _ => {
-                            self.err(d(
-                                "Y-T0013",
-                                Severity::Error,
-                                "空 list 字面量无法推断元素类型（决策 52）",
-                                e.span,
-                            )
-                            .with_suggestion("加类型标注：`let xs: [int] = []`"));
+                            self.err(
+                                d(
+                                    "Y-T0013",
+                                    Severity::Error,
+                                    "空 list 字面量无法推断元素类型（决策 52）",
+                                    e.span,
+                                )
+                                .with_suggestion("加类型标注：`let xs: [int] = []`"),
+                            );
                             Ty::list(Ty::Unit)
                         }
                     };
@@ -1088,13 +1242,15 @@ impl<'e> Checker<'e> {
                     return match expected {
                         Some(Ty::Map(k, v)) => Ty::Map(k.clone(), v.clone()),
                         _ => {
-                            self.err(d(
-                                "Y-T0013",
-                                Severity::Error,
-                                "空 map 字面量无法推断键值类型（决策 52）",
-                                e.span,
-                            )
-                            .with_suggestion("加类型标注：`let m: [string: int] = [:]`"));
+                            self.err(
+                                d(
+                                    "Y-T0013",
+                                    Severity::Error,
+                                    "空 map 字面量无法推断键值类型（决策 52）",
+                                    e.span,
+                                )
+                                .with_suggestion("加类型标注：`let m: [string: int] = [:]`"),
+                            );
                             Ty::Map(Box::new(Ty::Str), Box::new(Ty::Unit))
                         }
                     };
@@ -1137,13 +1293,15 @@ impl<'e> Checker<'e> {
         let any_untyped = params.iter().any(|p| p.ty.is_none());
         if any_untyped && formal.is_none() {
             let span = params.first().map(|p| p.span).unwrap_or(Span::new(0, 0));
-            self.err(d(
-                "Y-T0014",
-                Severity::Error,
-                "lambda 参数类型无法推断（需要调用上下文）",
-                span,
-            )
-            .with_suggestion("为参数补类型标注，或确保 lambda 直接作为函数实参"));
+            self.err(
+                d(
+                    "Y-T0014",
+                    Severity::Error,
+                    "lambda 参数类型无法推断（需要调用上下文）",
+                    span,
+                )
+                .with_suggestion("为参数补类型标注，或确保 lambda 直接作为函数实参"),
+            );
             return Ty::Fn(vec![], Box::new(Ty::Unit));
         }
         let mut ptys: Vec<Ty> = Vec::new();
@@ -1160,7 +1318,11 @@ impl<'e> Checker<'e> {
             ptys.push(ty.clone());
             self.scopes.last_mut().unwrap().vars.insert(
                 p.name.clone(),
-                Binding { ty, mutable: false, used: false },
+                Binding {
+                    ty,
+                    mutable: false,
+                    used: false,
+                },
             );
         }
         let body_ty = match body {
@@ -1218,7 +1380,11 @@ impl<'e> Checker<'e> {
             for (n, t) in binds {
                 self.scopes.last_mut().unwrap().vars.insert(
                     n,
-                    Binding { ty: t, mutable: false, used: true },
+                    Binding {
+                        ty: t,
+                        mutable: false,
+                        used: true,
+                    },
                 );
             }
             let bt = self.check_expr(&arm.body, expected.or(result.as_ref()));
@@ -1245,13 +1411,15 @@ impl<'e> Checker<'e> {
                 _ => false,
             };
         if !exhaustive {
-            self.err(d(
-                "Y-T0015",
-                Severity::Error,
-                "match 未穷尽所有情况（决策：穷尽处理）",
-                scrutinee.span,
-            )
-            .with_suggestion("补齐缺失变体分支，或加兜底分支（绑定名 / _）"));
+            self.err(
+                d(
+                    "Y-T0015",
+                    Severity::Error,
+                    "match 未穷尽所有情况（决策：穷尽处理）",
+                    scrutinee.span,
+                )
+                .with_suggestion("补齐缺失变体分支，或加兜底分支（绑定名 / _）"),
+            );
         }
         result.unwrap_or(Ty::Unit)
     }
@@ -1302,7 +1470,11 @@ impl<'e> Checker<'e> {
                         (Some(pt), Some(binder)) => {
                             // 载荷类型以 tag 实参代换（Tree[int] → Node2[int]）
                             let subst = self.tag_subst(&owner, &tag_args);
-                            let r = Resolver { decls: &self.decls, env: self.env, subst };
+                            let r = Resolver {
+                                decls: &self.decls,
+                                env: self.env,
+                                subst,
+                            };
                             let t = r.resolve(&pt).unwrap_or(Ty::Unit);
                             vec![(binder.clone(), t)]
                         }
@@ -1405,13 +1577,15 @@ impl<'e> Checker<'e> {
             }
             BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
                 if !(lt.same(&rt) && matches!(lt, Ty::Int | Ty::Float)) {
-                    self.err(d(
-                        "Y-T0002",
-                        Severity::Error,
-                        format!("比较要求同型 int/float，得到 `{lt}` / `{rt}`"),
-                        span,
-                    )
-                    .with_suggestion("float 排序走 sort_floats（决策 45：float 无全序）"));
+                    self.err(
+                        d(
+                            "Y-T0002",
+                            Severity::Error,
+                            format!("比较要求同型 int/float，得到 `{lt}` / `{rt}`"),
+                            span,
+                        )
+                        .with_suggestion("float 排序走 sort_floats（决策 45：float 无全序）"),
+                    );
                 }
                 Ty::Bool
             }
@@ -1462,14 +1636,20 @@ impl<'e> Checker<'e> {
             (Ty::Int, Ty::Int) => Ty::Int,
             (Ty::Float, Ty::Float) => Ty::Float,
             (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {
-                let other = if matches!(lt, Ty::Float) { lt.clone() } else { rt.clone() };
-                self.err(d(
-                    "Y-T0003",
-                    Severity::Error,
-                    format!("int 与 float 不可混算（决策 26）：`{lt}` 与 `{rt}`"),
-                    span,
-                )
-                .with_suggestion(format!("显式转换：`x as {other}`")));
+                let other = if matches!(lt, Ty::Float) {
+                    lt.clone()
+                } else {
+                    rt.clone()
+                };
+                self.err(
+                    d(
+                        "Y-T0003",
+                        Severity::Error,
+                        format!("int 与 float 不可混算（决策 26）：`{lt}` 与 `{rt}`"),
+                        span,
+                    )
+                    .with_suggestion(format!("显式转换：`x as {other}`")),
+                );
                 other
             }
             (Ty::Named { name, .. }, _) if lt.same(rt) => {
@@ -1479,18 +1659,25 @@ impl<'e> Checker<'e> {
                     BinOp::Mul => "Mul",
                     _ => "Div",
                 };
-                if self.decls.impls.iter().any(|i| i.proto == proto && i.for_ == *name) {
+                if self
+                    .decls
+                    .impls
+                    .iter()
+                    .any(|i| i.proto == proto && i.for_ == *name)
+                {
                     lt.clone()
                 } else {
-                    self.err(d(
-                        "Y-T0022",
-                        Severity::Error,
-                        format!("类型 `{name}` 未 impl `{proto}`，运算符不可用（决策 21）"),
-                        span,
-                    )
-                    .with_suggestion(format!(
-                        "显式实现：`impl {proto} for {name} {{ fn ... }}`"
-                    )));
+                    self.err(
+                        d(
+                            "Y-T0022",
+                            Severity::Error,
+                            format!("类型 `{name}` 未 impl `{proto}`，运算符不可用（决策 21）"),
+                            span,
+                        )
+                        .with_suggestion(format!(
+                            "显式实现：`impl {proto} for {name} {{ fn ... }}`"
+                        )),
+                    );
                     lt.clone()
                 }
             }
@@ -1517,16 +1704,17 @@ impl<'e> Checker<'e> {
         if lt.same(rt) {
             return;
         }
-        let is_distinct =
-            |t: &Ty| matches!(t, Ty::Named { name, .. } if matches!(self.decls.types.get(name), Some(TypeKind::Distinct { .. })));
+        let is_distinct = |t: &Ty| matches!(t, Ty::Named { name, .. } if matches!(self.decls.types.get(name), Some(TypeKind::Distinct { .. })));
         if is_distinct(lt) || is_distinct(rt) {
-            self.err(d(
-                "Y-T0010",
-                Severity::Error,
-                format!("distinct 类型不可与其它类型互换比较（决策 23）：`{lt}` vs `{rt}`"),
-                span,
-            )
-            .with_suggestion("用 `as` 显式转换到同一类型再比较"));
+            self.err(
+                d(
+                    "Y-T0010",
+                    Severity::Error,
+                    format!("distinct 类型不可与其它类型互换比较（决策 23）：`{lt}` vs `{rt}`"),
+                    span,
+                )
+                .with_suggestion("用 `as` 显式转换到同一类型再比较"),
+            );
         } else {
             self.err(self.mismatch(lt.clone(), rt.clone(), span));
         }
@@ -1564,19 +1752,29 @@ impl<'e> Checker<'e> {
                 Ty::Unit
             }
             Ty::Opt(_) => {
-                self.err(d(
-                    "Y-T0004",
-                    Severity::Error,
-                    "可空值先解包再取字段",
-                    base_span,
-                )
-                .with_suggestion("用 `x!` 解包，或在 `if x != nil` 内使用智能收窄（决策 40）"));
+                self.err(
+                    d(
+                        "Y-T0004",
+                        Severity::Error,
+                        "可空值先解包再取字段",
+                        base_span,
+                    )
+                    .with_suggestion("用 `x!` 解包，或在 `if x != nil` 内使用智能收窄（决策 40）"),
+                );
                 Ty::Unit
             }
-            Ty::Str | Ty::List(_) | Ty::Map(..) | Ty::Int | Ty::Float | Ty::Bool | Ty::Rune
+            Ty::Str
+            | Ty::List(_)
+            | Ty::Map(..)
+            | Ty::Int
+            | Ty::Float
+            | Ty::Bool
+            | Ty::Rune
             | Ty::Json => {
-                self.err(d("Y-T0023", Severity::Error, "内建集合无方法（19.2）", span)
-                    .with_suggestion("使用自由函数 + 数据第一参数：`len(xs)`、`xs |> map(f)`"));
+                self.err(
+                    d("Y-T0023", Severity::Error, "内建集合无方法（19.2）", span)
+                        .with_suggestion("使用自由函数 + 数据第一参数：`len(xs)`、`xs |> map(f)`"),
+                );
                 Ty::Unit
             }
             other => {
@@ -1642,13 +1840,15 @@ impl<'e> Checker<'e> {
                 Ty::Unit
             }
             (Ty::Str, _) => {
-                self.err(d(
-                    "Y-T0025",
-                    Severity::Error,
-                    "禁 `s[i]`：码点下标是 O(n) 伪装 O(1)（决策 46）",
-                    span,
-                )
-                .with_suggestion("用 `string.to_runes(s)[i]` 取码点"));
+                self.err(
+                    d(
+                        "Y-T0025",
+                        Severity::Error,
+                        "禁 `s[i]`：码点下标是 O(n) 伪装 O(1)（决策 46）",
+                        span,
+                    )
+                    .with_suggestion("用 `string.to_runes(s)[i]` 取码点"),
+                );
                 Ty::Rune // 降低级联噪声
             }
             (other, _) => {
@@ -1688,13 +1888,17 @@ impl<'e> Checker<'e> {
             }
         };
         if !ok {
-            self.err(d(
-                "Y-T0011",
-                Severity::Error,
-                format!("非法转换：`{from}` as `{to}`（决策 26：as 仅限数值互转与 distinct 往返）"),
-                span,
-            )
-            .with_suggestion("int↔float、distinct↔基类型之外的结构变化请用显式函数"));
+            self.err(
+                d(
+                    "Y-T0011",
+                    Severity::Error,
+                    format!(
+                        "非法转换：`{from}` as `{to}`（决策 26：as 仅限数值互转与 distinct 往返）"
+                    ),
+                    span,
+                )
+                .with_suggestion("int↔float、distinct↔基类型之外的结构变化请用显式函数"),
+            );
         }
     }
 
@@ -1734,7 +1938,11 @@ impl<'e> Checker<'e> {
             self.err(d(
                 "Y-T0007",
                 Severity::Error,
-                format!("`{name}` 需要 {} 个类型实参，得到 {}", params.len(), rargs.len()),
+                format!(
+                    "`{name}` 需要 {} 个类型实参，得到 {}",
+                    params.len(),
+                    rargs.len()
+                ),
                 span,
             ));
         }
@@ -1745,9 +1953,13 @@ impl<'e> Checker<'e> {
                 return c.host_field(name, f);
             }
             fields.iter().find(|(n, _)| n == f).map(|(_, t)| {
-                Resolver { decls: &c.decls, env: c.env, subst: subst.clone() }
-                    .resolve(t)
-                    .unwrap_or(Ty::Unit)
+                Resolver {
+                    decls: &c.decls,
+                    env: c.env,
+                    subst: subst.clone(),
+                }
+                .resolve(t)
+                .unwrap_or(Ty::Unit)
             })
         };
         if let Some(sp) = spread {
@@ -1802,18 +2014,19 @@ impl<'e> Checker<'e> {
             fields.iter().map(|(n, _)| n.clone()).collect()
         };
         if spread.is_none() {
-            let missing: Vec<String> =
-                all.iter().filter(|f| !seen.contains(f)).cloned().collect();
+            let missing: Vec<String> = all.iter().filter(|f| !seen.contains(f)).cloned().collect();
             if !missing.is_empty() {
-                self.err(d(
-                    "Y-T0028",
-                    Severity::Error,
-                    format!("`{name}` 缺少字段：{}", missing.join(", ")),
-                    span,
-                )
-                .with_suggestion(
-                    "补齐字段，或用 `Type { ..base, field: v }` 基于已有值更新（决策 41）",
-                ));
+                self.err(
+                    d(
+                        "Y-T0028",
+                        Severity::Error,
+                        format!("`{name}` 缺少字段：{}", missing.join(", ")),
+                        span,
+                    )
+                    .with_suggestion(
+                        "补齐字段，或用 `Type { ..base, field: v }` 基于已有值更新（决策 41）",
+                    ),
+                );
             }
         }
         Ty::named(name, rargs)
@@ -1838,13 +2051,18 @@ impl<'e> Checker<'e> {
             })
             .unwrap_or(false);
         if !mutable {
-            self.err(d(
-                "Y-T0033",
-                Severity::Error,
-                "赋值目标必须声明为 `let mut`（可变点显式，19.2）",
-                span,
-            )
-            .with_suggestion(format!("改为 `let mut {} = ...`", tname.clone().unwrap_or_default())));
+            self.err(
+                d(
+                    "Y-T0033",
+                    Severity::Error,
+                    "赋值目标必须声明为 `let mut`（可变点显式，19.2）",
+                    span,
+                )
+                .with_suggestion(format!(
+                    "改为 `let mut {} = ...`",
+                    tname.clone().unwrap_or_default()
+                )),
+            );
         }
         let tt = self.check_expr(target, None);
         let vt = self.check_expr(value, Some(&tt));
@@ -1967,7 +2185,9 @@ impl<'e> Checker<'e> {
             _ => Some(self.check_expr(callee, None)),
         };
         match sig {
-            Some(s @ Ty::Fn(..)) | Some(s @ Ty::AsyncFn(..)) => self.apply_sig(&s, args, expected, piped, span),
+            Some(s @ Ty::Fn(..)) | Some(s @ Ty::AsyncFn(..)) => {
+                self.apply_sig(&s, args, expected, piped, span)
+            }
             Some(other) => {
                 self.err(d(
                     "Y-T0002",
@@ -1999,13 +2219,15 @@ impl<'e> Checker<'e> {
         let (ok_ty, err_ty) = match expected {
             Some(Ty::Res(o, e)) => ((**o).clone(), (**e).clone()),
             _ => {
-                self.err(d(
-                    "Y-T0018",
-                    Severity::Error,
-                    format!("`{which}` 的 Result 类型无法从上下文推断"),
-                    span,
-                )
-                .with_suggestion("在 return 位置使用（函数返回类型提供上下文），或加类型标注"));
+                self.err(
+                    d(
+                        "Y-T0018",
+                        Severity::Error,
+                        format!("`{which}` 的 Result 类型无法从上下文推断"),
+                        span,
+                    )
+                    .with_suggestion("在 return 位置使用（函数返回类型提供上下文），或加类型标注"),
+                );
                 for a in args {
                     self.check_expr(a, None);
                 }
@@ -2049,24 +2271,31 @@ impl<'e> Checker<'e> {
         let offset = if piped.is_some() { 1 } else { 0 };
         if let Some(p) = &piped {
             if formals.is_empty() {
-                self.err(d("Y-T0008", Severity::Error, "管道送入的函数不接受参数", span));
+                self.err(d(
+                    "Y-T0008",
+                    Severity::Error,
+                    "管道送入的函数不接受参数",
+                    span,
+                ));
                 return Ty::Unit;
             }
             self.unify(&formals[0], p, &mut subst, span);
         }
         let expect_argc = formals.len() - offset;
         if args.len() != expect_argc {
-            self.err(d(
-                "Y-T0008",
-                Severity::Error,
-                format!(
-                    "函数需要 {} 个参数，得到 {}（决策 48：无默认/命名参数）",
-                    expect_argc,
-                    args.len()
-                ),
-                span,
-            )
-            .with_suggestion("可选配置走 struct 参数"));
+            self.err(
+                d(
+                    "Y-T0008",
+                    Severity::Error,
+                    format!(
+                        "函数需要 {} 个参数，得到 {}（决策 48：无默认/命名参数）",
+                        expect_argc,
+                        args.len()
+                    ),
+                    span,
+                )
+                .with_suggestion("可选配置走 struct 参数"),
+            );
             for a in args {
                 self.check_expr(a, None);
             }
@@ -2075,15 +2304,18 @@ impl<'e> Checker<'e> {
         for (i, arg) in args.iter().enumerate() {
             let formal_raw = formals[i + offset].clone();
             self.bind_arg(&formal_raw, arg, &mut subst);
-        }        let ret = substitute(&ret, &subst);
+        }
+        let ret = substitute(&ret, &subst);
         if contains_generic(&ret) {
-            self.err(d(
-                "Y-T0018",
-                Severity::Error,
-                format!("返回类型 `{ret}` 含未绑定泛型，无法推断"),
-                span,
-            )
-            .with_suggestion("让实参类型可确定泛型（如提供带类型标注的 lambda），或加标注"));
+            self.err(
+                d(
+                    "Y-T0018",
+                    Severity::Error,
+                    format!("返回类型 `{ret}` 含未绑定泛型，无法推断"),
+                    span,
+                )
+                .with_suggestion("让实参类型可确定泛型（如提供带类型标注的 lambda），或加标注"),
+            );
         }
         let _ = expected;
         if is_async {
@@ -2163,13 +2395,15 @@ impl<'e> Checker<'e> {
         }
         let mut ret = substitute(&ret_ty(), &subst);
         if contains_generic(&ret) {
-            self.err(d(
-                "Y-T0018",
-                Severity::Error,
-                format!("返回类型 `{ret}` 含未绑定泛型，无法推断"),
-                span,
-            )
-            .with_suggestion("让实参类型可确定泛型（如提供带类型标注的 lambda），或加标注"));
+            self.err(
+                d(
+                    "Y-T0018",
+                    Severity::Error,
+                    format!("返回类型 `{ret}` 含未绑定泛型，无法推断"),
+                    span,
+                )
+                .with_suggestion("让实参类型可确定泛型（如提供带类型标注的 lambda），或加标注"),
+            );
         }
         if let Some(kind) = num_kinds.first() {
             ret = ret.resolve_num(kind);
@@ -2258,7 +2492,10 @@ fn substitute(ty: &Ty, subst: &HashMap<String, Ty>) -> Ty {
         Ty::Opt(t) => Ty::opt(substitute(t, subst)),
         Ty::Res(o, e) => Ty::res(substitute(o, subst), substitute(e, subst)),
         Ty::List(t) => Ty::list(substitute(t, subst)),
-        Ty::Map(k, v) => Ty::Map(Box::new(substitute(k, subst)), Box::new(substitute(v, subst))),
+        Ty::Map(k, v) => Ty::Map(
+            Box::new(substitute(k, subst)),
+            Box::new(substitute(v, subst)),
+        ),
         Ty::Fn(ps, r) => Ty::Fn(
             ps.iter().map(|p| substitute(p, subst)).collect(),
             Box::new(substitute(r, subst)),
@@ -2295,9 +2532,7 @@ fn builtin_arity_err(name: &str, argc: usize, span: Span) -> Diagnostic {
     d(
         "Y-T0008",
         Severity::Error,
-        format!(
-            "内建 `{name}` 不接受 {argc} 个参数（决策 48：无默认/命名参数）"
-        ),
+        format!("内建 `{name}` 不接受 {argc} 个参数（决策 48：无默认/命名参数）"),
         span,
     )
     .with_suggestion(format!("签名：{}", faces.join(" 或 ")))

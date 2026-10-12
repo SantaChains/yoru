@@ -72,11 +72,18 @@ pub struct Builtin {
 impl Builtin {
     /// 必选参数数（`Opt` 不计）。
     pub fn min_args(&self) -> usize {
-        self.params.iter().filter(|p| !matches!(p, Param::Opt(_))).count()
+        self.params
+            .iter()
+            .filter(|p| !matches!(p, Param::Opt(_)))
+            .count()
     }
     /// 最大参数数（变参 = 无上界，用 usize::MAX 表达）。
     pub fn max_args(&self) -> usize {
-        if self.variadic { usize::MAX } else { self.params.len() }
+        if self.variadic {
+            usize::MAX
+        } else {
+            self.params.len()
+        }
     }
     /// 该实参数是否可调（必选位 ≤ argc ≤ 最大位；变参只查下界）。
     pub fn accepts_argc(&self, argc: usize) -> bool {
@@ -342,7 +349,9 @@ pub fn builtins_named(name: &str) -> Vec<&'static Builtin> {
 
 /// 自由函数按元数选层（管道送入计入 lhs）。
 pub fn select_free(name: &str, argc: usize) -> Option<&'static Builtin> {
-    builtins_named(name).into_iter().find(|b| b.accepts_argc(argc))
+    builtins_named(name)
+        .into_iter()
+        .find(|b| b.accepts_argc(argc))
 }
 
 /// 模块限定函数选层（`math.sqrt` → bare 名同一分派约定）。
@@ -354,7 +363,9 @@ pub fn select_module(module: &str, field: &str, argc: usize) -> Option<&'static 
 
 /// 模块限定函数（不限元数）——lower 的限定调用归一用。
 pub fn module_fn(module: &str, field: &str) -> Option<&'static Builtin> {
-    BUILTINS.iter().find(|b| b.module == Some(module) && b.name == field)
+    BUILTINS
+        .iter()
+        .find(|b| b.module == Some(module) && b.name == field)
 }
 
 /// 该 bare 名是否是内建（禁遮蔽判据）。
@@ -370,7 +381,10 @@ mod tests {
     fn registry_internal_consistency() {
         // 名字非空、文档非空、软类型不出现在返回位之外的位置
         for b in BUILTINS {
-            assert!(!b.name.is_empty() && !b.doc.is_empty(), "empty name/doc in {b:?}");
+            assert!(
+                !b.name.is_empty() && !b.doc.is_empty(),
+                "empty name/doc in {b:?}"
+            );
             assert!(b.min_args() <= b.max_args(), "arity inverted: {}", b.name);
             // Opt 只允许出现在尾位
             let first_opt = b.params.iter().position(|p| matches!(p, Param::Opt(_)));
@@ -421,7 +435,11 @@ mod tests {
     fn names_deduped_and_stable() {
         let names = builtin_names();
         assert!(names.contains(&"len") && names.contains(&"print"));
-        assert_eq!(names.iter().filter(|&&n| n == "range").count(), 1, "range 去重");
+        assert_eq!(
+            names.iter().filter(|&&n| n == "range").count(),
+            1,
+            "range 去重"
+        );
         assert!(names.len() < BUILTINS.len(), "有重名条目不致膨胀名单");
     }
 }

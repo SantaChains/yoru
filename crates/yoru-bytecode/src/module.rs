@@ -49,7 +49,10 @@ pub enum Const {
     /// 原型索引
     Proto(u32),
     /// 变体标识（tag 序号, 变体序号）——ISTAG/PAYLOAD/TagNew 的操作数
-    Variant { tag: u32, variant: u32 },
+    Variant {
+        tag: u32,
+        variant: u32,
+    },
     Bool(bool),
 }
 
@@ -113,7 +116,11 @@ fn crc32(data: &[u8]) -> u32 {
     for (i, slot) in table.iter_mut().enumerate() {
         let mut c = i as u32;
         for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         *slot = c;
     }
@@ -258,7 +265,11 @@ impl Lbc0Module {
         let mut out = Sink::new();
         out.u32(MAGIC);
         out.u16(self.version);
-        out.u16(if has_debug { self.flags | FLAG_DEBUG } else { self.flags & !FLAG_DEBUG });
+        out.u16(if has_debug {
+            self.flags | FLAG_DEBUG
+        } else {
+            self.flags & !FLAG_DEBUG
+        });
         out.buf.extend_from_slice(&[0, 0, 0, 0]); // 保留 4 字节（文件头定额 12 字节，04 号 §4.5）
         // 段表
         out.u32(off_const);
@@ -282,7 +293,10 @@ impl Lbc0Module {
     /// （决策 9：validate-before-use；本函数是 fuzz 直靶）。
     pub fn deserialize(bytes: &[u8]) -> Result<Lbc0Module, String> {
         if bytes.len() < MIN_FILE_LEN {
-            return Err(format!("file too short: {} bytes (min {MIN_FILE_LEN})", bytes.len()));
+            return Err(format!(
+                "file too short: {} bytes (min {MIN_FILE_LEN})",
+                bytes.len()
+            ));
         }
         let magic = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
         if magic != MAGIC {
@@ -290,7 +304,10 @@ impl Lbc0Module {
         }
         let version = u16::from_le_bytes(bytes[4..6].try_into().unwrap());
         if version >> 8 != VERSION >> 8 {
-            return Err(format!("incompatible version: 0x{version:04X} (expect major {})", VERSION >> 8));
+            return Err(format!(
+                "incompatible version: 0x{version:04X} (expect major {})",
+                VERSION >> 8
+            ));
         }
         let flags = u16::from_le_bytes(bytes[6..8].try_into().unwrap());
 
@@ -302,7 +319,9 @@ impl Lbc0Module {
         }
 
         let rd = |off: usize, n: usize| -> Result<&[u8], String> {
-            bytes.get(off..off + n).ok_or_else(|| format!("truncated at offset {off}"))
+            bytes
+                .get(off..off + n)
+                .ok_or_else(|| format!("truncated at offset {off}"))
         };
         let ru32 = |off: usize| -> Result<u32, String> {
             Ok(u32::from_le_bytes(rd(off, 4)?.try_into().unwrap()))
@@ -319,7 +338,10 @@ impl Lbc0Module {
                 .checked_add(len)
                 .ok_or_else(|| format!("segment {idx} overflow"))?;
             if end as usize > bytes.len() {
-                return Err(format!("segment {idx} out of bounds: {off}+{len} > {}", bytes.len()));
+                return Err(format!(
+                    "segment {idx} out of bounds: {off}+{len} > {}",
+                    bytes.len()
+                ));
             }
         }
         let (c_off, c_len) = seg[0];
@@ -336,8 +358,11 @@ impl Lbc0Module {
         for _ in 0..str_count {
             let l = ru32(pos)? as usize;
             pos += 4;
-            let raw = bytes.get(pos..pos + l).ok_or_else(|| "string segment truncated".to_string())?;
-            let s = std::str::from_utf8(raw).map_err(|_| "invalid UTF-8 in string segment".to_string())?;
+            let raw = bytes
+                .get(pos..pos + l)
+                .ok_or_else(|| "string segment truncated".to_string())?;
+            let s = std::str::from_utf8(raw)
+                .map_err(|_| "invalid UTF-8 in string segment".to_string())?;
             strings.push(s.to_string());
             pos += l;
         }
@@ -346,7 +371,10 @@ impl Lbc0Module {
         }
         let str_ok = |i: u32| -> Result<(), String> {
             if i as usize >= strings.len() {
-                Err(format!("string index {i} out of bounds ({})", strings.len()))
+                Err(format!(
+                    "string index {i} out of bounds ({})",
+                    strings.len()
+                ))
             } else {
                 Ok(())
             }
@@ -374,7 +402,9 @@ impl Lbc0Module {
             str_ok(name)?;
             let mut variants = Vec::with_capacity(variant_count.min(4096));
             for _ in 0..variant_count {
-                let flag = *bytes.get(pos).ok_or_else(|| "tag segment truncated".to_string())?;
+                let flag = *bytes
+                    .get(pos)
+                    .ok_or_else(|| "tag segment truncated".to_string())?;
                 pos += 1;
                 variants.push(flag != 0);
             }
@@ -410,7 +440,9 @@ impl Lbc0Module {
         pos += 4;
         let mut consts = Vec::new();
         for _ in 0..const_count {
-            let tag = *bytes.get(pos).ok_or_else(|| "const segment truncated".to_string())?;
+            let tag = *bytes
+                .get(pos)
+                .ok_or_else(|| "const segment truncated".to_string())?;
             pos += 1;
             let c = match tag {
                 CTAG_INT => {
@@ -441,7 +473,9 @@ impl Lbc0Module {
                     Const::Variant { tag: t, variant: v } // 界检查留给验证器
                 }
                 CTAG_BOOL => {
-                    let b = *bytes.get(pos).ok_or_else(|| "const segment truncated".to_string())?;
+                    let b = *bytes
+                        .get(pos)
+                        .ok_or_else(|| "const segment truncated".to_string())?;
                     pos += 1;
                     Const::Bool(b != 0)
                 }
@@ -460,7 +494,9 @@ impl Lbc0Module {
         pos += 4;
         let mut protos = Vec::new();
         for _ in 0..proto_count {
-            let params = *bytes.get(pos).ok_or_else(|| "proto segment truncated".to_string())?;
+            let params = *bytes
+                .get(pos)
+                .ok_or_else(|| "proto segment truncated".to_string())?;
             let locals = u16::from_le_bytes(rd(pos + 1, 2)?.try_into().unwrap());
             let max_stack = u16::from_le_bytes(rd(pos + 3, 2)?.try_into().unwrap());
             pos += 5;
@@ -480,7 +516,10 @@ impl Lbc0Module {
             pos += 2;
             let mut upvalues = Vec::new();
             for _ in 0..uv_count {
-                let is_local = *bytes.get(pos).ok_or_else(|| "proto segment truncated".to_string())? != 0;
+                let is_local = *bytes
+                    .get(pos)
+                    .ok_or_else(|| "proto segment truncated".to_string())?
+                    != 0;
                 let index = u16::from_le_bytes(rd(pos + 1, 2)?.try_into().unwrap());
                 pos += 3;
                 upvalues.push(UpvalueDesc { is_local, index });
@@ -545,16 +584,33 @@ mod tests {
             version: VERSION,
             flags: 0,
             imports: vec![0],
-            tags: vec![TagInfo { name: 1, variants: vec![true, false] }],
-            structs: vec![StructInfo { name: 2, fields: vec![2, 3] }],
+            tags: vec![TagInfo {
+                name: 1,
+                variants: vec![true, false],
+            }],
+            structs: vec![StructInfo {
+                name: 2,
+                fields: vec![2, 3],
+            }],
             field_names: vec![2, 3],
-            consts: vec![Const::Int(-7), Const::Float(2.5), Const::Str(0), Const::Variant { tag: 0, variant: 1 }],
+            consts: vec![
+                Const::Int(-7),
+                Const::Float(2.5),
+                Const::Str(0),
+                Const::Variant { tag: 0, variant: 1 },
+            ],
             protos: vec![Proto {
                 params: 2,
                 locals: 4,
                 max_stack: 8,
-                code: vec![Instr::with_arg(crate::instr::Opcode::Const, 0), Instr::new(crate::instr::Opcode::Return)],
-                upvalues: vec![UpvalueDesc { is_local: true, index: 1 }],
+                code: vec![
+                    Instr::with_arg(crate::instr::Opcode::Const, 0),
+                    Instr::new(crate::instr::Opcode::Return),
+                ],
+                upvalues: vec![UpvalueDesc {
+                    is_local: true,
+                    index: 1,
+                }],
                 const_refs: vec![0],
             }],
             strings: vec!["std".into(), "Err".into(), "x".into(), "y".into()],

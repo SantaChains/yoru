@@ -13,11 +13,22 @@
 //! floor 除法/取模（决策 44）、溢出抛错（决策 16）、Map 缺键取 nil（决策 55）、
 //! 内建以 `Const(Str(名))` 分派注册表（阶段 3 调用约定）。
 
+// 同 yoru-bytecode/yoru-typeck 裁决：VM 的公开输入即 `yoru_bytecode` 的
+// `Lbc0Module`（`Instance::new`/`Vm::load`/`DebugInfo`）——运行字节码的
+// 消费者按构造依赖字节码 crate，workspace 内 semver 同步无错配面。
+#![allow(exported_private_dependencies)]
+
 pub mod builtins;
 pub mod debuginfo;
 pub mod demo;
 pub mod error;
 pub mod value;
+
+// 嵌入面（embedder surface）根级 re-export：宿主注入三件套
+// （`Value` 参数/返回、`VmError` 错误、`HostFn` 类型别名）+ VM 公开错误类型
+// 在 crate 根直接可见，嵌入方无需记子模块路径（外部消费者构建实证的摩擦点）。
+pub use error::{LimitKind, RuntimeError, VmError};
+pub use value::{ClosureObj, Cursor, HostFn, MapBox, StructObj, Value, VariantVal};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -27,8 +38,6 @@ use std::time::Instant;
 use yoru_bytecode::{Const, Instr, Lbc0Module, Opcode};
 
 use crate::debuginfo::DebugInfo;
-use crate::error::{LimitKind, RuntimeError, VmError};
-use crate::value::{ClosureObj, Cursor, HostFn, MapBox, StructObj, Value, VariantVal};
 
 /// 资源三限 + 节流参数（决策 71：三旋钮独立，运行时可调）。
 #[derive(Debug, Clone)]
@@ -37,7 +46,7 @@ pub struct Limits {
     pub max_instructions: u64,
     /// Yoru 调用深度上限（同时是 Rust 递归安全界；默认 256）
     pub max_call_depth: usize,
-    /// 堆字节近似限额（决策 72 的量级估算；默认 64 MiB）
+    /// 堆字节近似限额（决策 72 的量级估算；run 作用域累计，决策 79；默认 64 MiB）
     pub max_heap_bytes: i64,
     /// 中断检查节流：每 N 条指令检查一次钩子/时钟（QuickJS = 10000）
     pub check_interval: u64,
@@ -55,14 +64,23 @@ impl Default for Limits {
 }
 
 /// 观测快照（决策 72：宿主轮询，不做回调风暴式 profiling）。
+///
+/// 作用域（决策 79）：`instructions`/`calls`/`max_call_depth`/`heap_bytes`
+/// 为 **run 作用域**（`load` 时重置，三限的预算基础——长驻宿主同一 Vm
+/// 反复 run 不被历史消耗饿死）；`total_*` 为 **Vm 生命周期单调累计**
+/// （不参与限额，供宿主观测整个生命周期的总消耗）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Stats {
     pub instructions: u64,
     pub calls: u64,
     pub max_call_depth: usize,
-    /// 堆字节近似值（创建计账，不追踪释放——量级观测用途）
+    /// 堆字节近似值（创建计账，不追踪释放——量级观测用途；run 作用域）
     pub heap_bytes: i64,
     pub output_bytes: usize,
+    /// Vm 生命周期累计指令数（单调，不随 run 重置）
+    pub total_instructions: u64,
+    /// Vm 生命周期累计分配字节（单调，不随 run 重置）
+    pub total_allocated: i64,
 }
 
 /// 调用栈帧。
@@ -242,8 +260,17 @@ impl Vm {
     /// 决策 76）。签名契约单一闸口在 typeck（`Env::with_host_fns`）——
     /// 未注入名字的调用 = 编译期 Y-T0001；此处仅做 fail-closed 兜底
     /// （未注册名调用 = 运行时 Y-H9000，覆盖未经 typeck 的字节码直载）。
-    pub fn register_host_fn(&mut self, name: &str, f: HostFn) {
-        self.host_fns.insert(name.to_string(), f);
+    ///
+    /// **嵌入体感（2026-10-12 外部探针实证）**：接受任意 `Fn` 闭包（含
+    /// `move` 捕获宿主状态），内部统一 `Rc` 包装——嵌入方不写
+    /// `Rc::new(..) as HostFn` 礼节（`demo.rs` 旧写法即该礼节的来源）。
+    /// 泛型参数使裸闭包与 `Rc<dyn Fn>` 均可传入（后者经 `Rc<F>: Fn`）。
+    pub fn register_host_fn<F>(&mut self, name: &str, f: F)
+    where
+        F: Fn(&mut Vm, &[Value]) -> Result<Value, VmError> + 'static,
+    {
+        let boxed: HostFn = Rc::new(f);
+        self.host_fns.insert(name.to_string(), boxed);
     }
 
     /// 宿主函数调用：查注册表 → **panic 边界**（catch_unwind → 结构化
@@ -309,7 +336,12 @@ impl Vm {
     }
 
     /// 按原型序号执行（strip 产物的入口路径：宿主在 debug 产物上解析好序号再 strip）。
-    pub fn run_at(&mut self, inst: Instance, proto: usize, args: Vec<Value>) -> Result<Value, VmError> {
+    pub fn run_at(
+        &mut self,
+        inst: Instance,
+        proto: usize,
+        args: Vec<Value>,
+    ) -> Result<Value, VmError> {
         self.load(inst);
         if proto >= self.module_ref().protos.len() {
             return Err(self.rerr_no_pc("Y-R9000", format!("proto #{proto} out of range")));
@@ -318,8 +350,10 @@ impl Vm {
     }
 
     fn run_at_loaded(&mut self, proto: usize, args: Vec<Value>) -> Result<Value, VmError> {
-        let closure =
-            Value::Closure(Rc::new(ClosureObj { proto: proto as u32, upvals: Vec::new() }));
+        let closure = Value::Closure(Rc::new(ClosureObj {
+            proto: proto as u32,
+            upvals: Vec::new(),
+        }));
         self.call_value(closure, args)
     }
 
@@ -332,6 +366,16 @@ impl Vm {
         self.debug = DebugInfo::from_module(&inst.module).unwrap_or_default();
         self.frames.clear();
         self.stack.clear();
+        // 决策 79：三限预算改 run 作用域——指令/调用/堆计数随 load 重置，
+        // 长驻宿主（同一 Vm 反复 run：REPL/服务器/宿主多次回调脚本）不再
+        // 被历史消耗饿死；单调累计在 stats.total_*（观测，不参与限额）。
+        // deadline/interrupt 有意不重置：宿主 `set_deadline(t); run(..)`
+        // 的调用序会被 load 抹掉。
+        self.heap_bytes = 0;
+        self.stats.instructions = 0;
+        self.stats.calls = 0;
+        self.stats.max_call_depth = 0;
+        self.stats.heap_bytes = 0;
     }
 
     fn module_ref(&self) -> &Lbc0Module {
@@ -398,7 +442,11 @@ impl Vm {
     }
 
     fn cur_proto(&self) -> usize {
-        self.frames.last().expect("step without frame").closure.proto as usize
+        self.frames
+            .last()
+            .expect("step without frame")
+            .closure
+            .proto as usize
     }
 
     fn cur_pc(&self) -> usize {
@@ -437,6 +485,7 @@ impl Vm {
     fn step(&mut self) -> Result<Step, VmError> {
         // 预算与节流（决策 71）
         self.stats.instructions += 1;
+        self.stats.total_instructions += 1;
         if self.stats.instructions > self.limits.max_instructions {
             return Err(VmError::Limit(LimitKind::Instructions));
         }
@@ -469,9 +518,11 @@ impl Vm {
                     Const::Float(v) => Value::Float(v),
                     Const::Str(i) => self.str_value(i),
                     Const::Bool(b) => Value::Bool(b),
-                    Const::Variant { tag, variant } => {
-                        Value::Variant(Rc::new(VariantVal { tag, variant, payload: None }))
-                    }
+                    Const::Variant { tag, variant } => Value::Variant(Rc::new(VariantVal {
+                        tag,
+                        variant,
+                        payload: None,
+                    })),
                     Const::Proto(_) => {
                         return Err(self.rerr("Y-I9002", "Const(Proto) is not executable"));
                     }
@@ -581,9 +632,7 @@ impl Vm {
                 let mut rc = Rc::clone(&f.closure);
                 // 按值快照模型（决策 31）：get_mut 双重裁决（共享拒绝 / 索引在界）
                 let slot = Rc::get_mut(&mut rc)
-                    .ok_or_else(|| {
-                        self.rerr("Y-I9005", "upvalue closure is shared, cannot store")
-                    })?
+                    .ok_or_else(|| self.rerr("Y-I9005", "upvalue closure is shared, cannot store"))?
                     .upvals
                     .get_mut(idx)
                     .ok_or_else(|| self.rerr("Y-I9004", "upvalue index out of range"))?;
@@ -654,7 +703,8 @@ impl Vm {
                 let v = self.pop();
                 let r = match v {
                     Value::Int(a) => Value::Int(
-                        a.checked_neg().ok_or_else(|| self.rerr("Y-R9001", "integer overflow"))?,
+                        a.checked_neg()
+                            .ok_or_else(|| self.rerr("Y-R9001", "integer overflow"))?,
                     ),
                     Value::Float(a) => Value::Float(-a),
                     other => {
@@ -670,13 +720,19 @@ impl Vm {
                 let r = match v {
                     Value::Bool(b) => Value::Bool(!b),
                     other => {
-                        return Err(self
-                            .rerr("Y-R9008", format!("`not` expects bool, got {}", other.display())));
+                        return Err(self.rerr(
+                            "Y-R9008",
+                            format!("`not` expects bool, got {}", other.display()),
+                        ));
                     }
                 };
                 self.push(r);
             }
-            Opcode::Band | Opcode::Bor | Opcode::Bxor | Opcode::Shl | Opcode::Shr
+            Opcode::Band
+            | Opcode::Bor
+            | Opcode::Bxor
+            | Opcode::Shl
+            | Opcode::Shr
             | Opcode::Ushr => {
                 let (a, b) = self.pop2()?;
                 let (Value::Int(a), Value::Int(b)) = (&a, &b) else {
@@ -696,8 +752,9 @@ impl Vm {
                     Opcode::Bxor => Value::Int(a ^ b),
                     _ => {
                         if !(0..64).contains(&b) {
-                            return Err(self
-                                .rerr("Y-R9009", format!("shift amount {b} outside 0..64")));
+                            return Err(
+                                self.rerr("Y-R9009", format!("shift amount {b} outside 0..64"))
+                            );
                         }
                         match instr.op {
                             Opcode::Shl => Value::Int(a.checked_shl(b as u32).unwrap_or(0)),
@@ -718,11 +775,9 @@ impl Vm {
                 let ord = match (&a, &b) {
                     (Value::Int(x), Value::Int(y)) => x.cmp(y),
                     (Value::Str(x), Value::Str(y)) => x.cmp(y),
-                    (Value::Float(x), Value::Float(y)) => {
-                        x.partial_cmp(y).ok_or_else(|| {
-                            self.rerr("Y-R9011", "float comparison with NaN is unordered")
-                        })?
-                    }
+                    (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).ok_or_else(|| {
+                        self.rerr("Y-R9011", "float comparison with NaN is unordered")
+                    })?,
                     _ => {
                         return Err(self.rerr(
                             "Y-R9007",
@@ -790,9 +845,11 @@ impl Vm {
                 let name = self.field_name(instr.arg)?;
                 let out = match container {
                     Value::Struct(s) => self.with_struct_mut(s, instr.arg, value)?,
-                    Value::Map(m) => {
-                        Value::Map(self.with_map_mut(m, Value::Str(Rc::from(name.as_str())), value)?)
-                    }
+                    Value::Map(m) => Value::Map(self.with_map_mut(
+                        m,
+                        Value::Str(Rc::from(name.as_str())),
+                        value,
+                    )?),
                     other => {
                         return Err(self.rerr(
                             "Y-R9012",
@@ -850,10 +907,9 @@ impl Vm {
                         let i = *i;
                         let len = l.borrow().len();
                         if i < 0 || i as usize >= len {
-                            return Err(self.rerr(
-                                "Y-R9013",
-                                format!("list index {i} outside 0..{len}"),
-                            ));
+                            return Err(
+                                self.rerr("Y-R9013", format!("list index {i} outside 0..{len}"))
+                            );
                         }
                         self.with_list_mut(l, |v| v[i as usize] = value.clone())?
                     }
@@ -920,8 +976,9 @@ impl Vm {
                         return Err(self.rerr("Y-R9015", "unwrap of nil"));
                     }
                     other => {
-                        return Err(self
-                            .rerr("Y-R9015", format!("cannot unwrap {}", other.display())));
+                        return Err(
+                            self.rerr("Y-R9015", format!("cannot unwrap {}", other.display()))
+                        );
                     }
                 };
                 self.push(payload.map(|p| (*p).clone()).unwrap_or(Value::Nil));
@@ -933,6 +990,39 @@ impl Vm {
                     _ => false,
                 };
                 self.push(Value::Bool(is_err));
+            }
+            Opcode::SetIndexLocal => {
+                // 快路径：弹 (值, 索引)，对局部槽原地变异。槽位值在此期间暂出，
+                // 使 with_list_mut/with_map_mut 看到 refcount==1（仅槽位自身持有）。
+                // 运行时错误必终止 run（try 是 Result 传播非异常捕获），槽位无需还原。
+                let value = self.pop();
+                let idx = self.pop();
+                let slot = instr.arg as usize;
+                let base = std::mem::replace(
+                    &mut self.frames.last_mut().expect("frame").locals[slot],
+                    Value::Nil,
+                );
+                let out: Result<Value, VmError> = 'op: {
+                    match base {
+                        Value::List(l) => {
+                            let Value::Int(i) = &idx else {
+                                break 'op Err(self.rerr("Y-R9013", "list index must be int"));
+                            };
+                            let i = *i;
+                            let len = l.borrow().len();
+                            if i < 0 || i as usize >= len {
+                                break 'op Err(self
+                                    .rerr("Y-R9013", format!("list index {i} outside 0..{len}")));
+                            }
+                            self.with_list_mut(l, |v| v[i as usize] = value)
+                        }
+                        Value::Map(m) => self.with_map_mut(m, idx, value).map(Value::Map),
+                        other => break 'op Err(
+                            self.rerr("Y-R9013", format!("cannot index-assign {}", other.display()))
+                        ),
+                    }
+                };
+                self.frames.last_mut().expect("frame").locals[slot] = out?;
             }
             Opcode::Raise => {
                 let v = self.pop();
@@ -963,10 +1053,9 @@ impl Vm {
                         next: 0,
                     },
                     other => {
-                        return Err(self.rerr(
-                            "Y-R9016",
-                            format!("{} is not iterable", other.display()),
-                        ));
+                        return Err(
+                            self.rerr("Y-R9016", format!("{} is not iterable", other.display()))
+                        );
                     }
                 };
                 self.alloc(64)?;
@@ -1042,7 +1131,10 @@ impl Vm {
                     other => {
                         return Err(self.rerr(
                             "Y-R9017",
-                            format!("payload extract on non-matching variant: {}", other.display()),
+                            format!(
+                                "payload extract on non-matching variant: {}",
+                                other.display()
+                            ),
                         ));
                     }
                 };
@@ -1051,9 +1143,17 @@ impl Vm {
             Opcode::TagNew => {
                 let (tag, variant) = self.variant_const(instr.arg)?;
                 let has_payload = self.module_ref().tags[tag as usize].variants[variant as usize];
-                let payload = if has_payload { Some(Rc::new(self.pop())) } else { None };
+                let payload = if has_payload {
+                    Some(Rc::new(self.pop()))
+                } else {
+                    None
+                };
                 self.alloc(32)?;
-                self.push(Value::Variant(Rc::new(VariantVal { tag, variant, payload })));
+                self.push(Value::Variant(Rc::new(VariantVal {
+                    tag,
+                    variant,
+                    payload,
+                })));
             }
             Opcode::Convert => {
                 let v = self.pop();
@@ -1072,8 +1172,9 @@ impl Vm {
                         match u32::try_from(*a).ok().and_then(char::from_u32) {
                             Some(_) => Value::Int(*a),
                             None => {
-                                return Err(self
-                                    .rerr("Y-R9019", format!("invalid rune code point {a}")));
+                                return Err(
+                                    self.rerr("Y-R9019", format!("invalid rune code point {a}"))
+                                );
                             }
                         }
                     }
@@ -1136,7 +1237,9 @@ impl Vm {
                         Value::Str(Rc::from(out.as_str()))
                     }
                     other => {
-                        return Err(self.rerr("Y-R9020", format!("cannot slice {}", other.display())));
+                        return Err(
+                            self.rerr("Y-R9020", format!("cannot slice {}", other.display()))
+                        );
                     }
                 };
                 self.push(v);
@@ -1216,6 +1319,7 @@ impl Vm {
     fn alloc(&mut self, bytes: i64) -> Result<(), VmError> {
         self.heap_bytes += bytes;
         self.stats.heap_bytes = self.heap_bytes;
+        self.stats.total_allocated += bytes;
         if self.heap_bytes > self.limits.max_heap_bytes {
             return Err(VmError::Limit(LimitKind::HeapBytes));
         }
@@ -1239,12 +1343,7 @@ impl Vm {
     }
 
     /// COW 映射变更：键存在则更新（保持插入序），否则尾部插入（决策 36）。
-    fn with_map_mut(
-        &mut self,
-        m: MapBox,
-        k: Value,
-        v: Value,
-    ) -> Result<MapBox, VmError> {
+    fn with_map_mut(&mut self, m: MapBox, k: Value, v: Value) -> Result<MapBox, VmError> {
         if Rc::strong_count(&m) == 1 {
             {
                 let mut guard = m.borrow_mut();
@@ -1334,9 +1433,11 @@ mod tests {
 
     #[test]
     fn integer_overflow_raises_runtime_error() {
-        let err = run_src("pub fn main() -> int {\n    return 9223372036854775807 + 1\n}\n")
-            .unwrap_err();
-        let VmError::Runtime(e) = err else { panic!("runtime") };
+        let err =
+            run_src("pub fn main() -> int {\n    return 9223372036854775807 + 1\n}\n").unwrap_err();
+        let VmError::Runtime(e) = err else {
+            panic!("runtime")
+        };
         assert_eq!(e.code, "Y-R9001");
     }
 
@@ -1367,9 +1468,16 @@ mod tests {
         )
         .expect("run");
         // try 对 Ok 解包 → a = 2；find(...,9) = Err(NotFound) → Ok(21)
-        let Value::Variant(var) = &v else { panic!("variant") };
+        let Value::Variant(var) = &v else {
+            panic!("variant")
+        };
         assert_eq!(var.variant, 0, "Ok");
-        assert!(var.payload.as_ref().expect("payload").deep_eq(&Value::Int(21)));
+        assert!(
+            var.payload
+                .as_ref()
+                .expect("payload")
+                .deep_eq(&Value::Int(21))
+        );
     }
 
     #[test]
@@ -1389,8 +1497,7 @@ mod tests {
         )
         .expect("run");
         assert!(
-            matches!(v, Value::Variant(ref var) if var.variant == 0)
-                || matches!(v, Value::Nil)
+            matches!(v, Value::Variant(ref var) if var.variant == 0) || matches!(v, Value::Nil)
         );
     }
 
@@ -1430,7 +1537,9 @@ mod tests {
         let inst = compile("pub fn main() {\n    assert(1 == 2, \"boom\")\n}\n");
         let mut vm = Vm::new();
         let err = vm.run(inst, None, vec![]).unwrap_err();
-        let VmError::Runtime(e) = err else { panic!("runtime") };
+        let VmError::Runtime(e) = err else {
+            panic!("runtime")
+        };
         assert_eq!(e.code, "Y-R9005");
         assert_eq!(e.message, "boom");
         assert!(e.src_off.is_some(), "debug 产物必须带源偏移（决策 70）");
@@ -1441,7 +1550,10 @@ mod tests {
     #[test]
     fn instruction_budget_kills_infinite_loop() {
         let mut vm = Vm::new();
-        vm.set_limits(Limits { max_instructions: 50_000, ..Limits::default() });
+        vm.set_limits(Limits {
+            max_instructions: 50_000,
+            ..Limits::default()
+        });
         let err = vm
             .run(
                 compile("pub fn main() {\n    let mut i = 0\n    while true { i = i + 1 }\n}\n"),
@@ -1455,7 +1567,10 @@ mod tests {
     #[test]
     fn call_depth_limit() {
         let mut vm = Vm::new();
-        vm.set_limits(Limits { max_call_depth: 32, ..Limits::default() });
+        vm.set_limits(Limits {
+            max_call_depth: 32,
+            ..Limits::default()
+        });
         let err = vm
             .run(
                 compile(
@@ -1471,10 +1586,17 @@ mod tests {
     #[test]
     fn interrupt_hook_fires() {
         let mut vm = Vm::new();
-        vm.set_limits(Limits { check_interval: 1, ..Limits::default() });
+        vm.set_limits(Limits {
+            check_interval: 1,
+            ..Limits::default()
+        });
         vm.set_interrupt(Box::new(|_| true));
         let err = vm
-            .run(compile("pub fn main() -> int {\n    return 1\n}\n"), None, vec![])
+            .run(
+                compile("pub fn main() -> int {\n    return 1\n}\n"),
+                None,
+                vec![],
+            )
             .unwrap_err();
         assert!(matches!(err, VmError::Interrupted));
     }
@@ -1563,7 +1685,9 @@ mod tests {
         let r = vm
             .run(inst, Some("summarize"), vec![demo::demo_ctx(), items])
             .expect("summarize runs");
-        let Value::Variant(var) = &r else { panic!("Result variant") };
+        let Value::Variant(var) = &r else {
+            panic!("Result variant")
+        };
         // big 被 continue 过滤 → best=small → ctx.log("picked of 2")；
         // n = m["b"] 缺失键 → None → n == nil 成立 → Err(NotFound)（决策 55 语义）
         assert_eq!(var.variant, 1, "Err（n==nil 早返回）");
@@ -1580,11 +1704,46 @@ mod tests {
     #[test]
     fn heap_byte_limit_triggers() {
         let mut vm = Vm::new();
-        vm.set_limits(Limits { max_heap_bytes: 32, ..Limits::default() });
+        vm.set_limits(Limits {
+            max_heap_bytes: 32,
+            ..Limits::default()
+        });
         let err = vm
-            .run(compile("pub fn main() {\n    let xs = [1, 2, 3, 4]\n}\n"), None, vec![])
+            .run(
+                compile("pub fn main() {\n    let xs = [1, 2, 3, 4]\n}\n"),
+                None,
+                vec![],
+            )
             .unwrap_err();
         assert!(matches!(err, VmError::Limit(LimitKind::HeapBytes)));
+    }
+
+    #[test]
+    fn run_scoped_budgets_reset_between_runs() {
+        // 决策 79：同一 Vm 连续 run，三限预算按 run 重置；单调累计入 total_*。
+        // 回归意义：修复前指令/堆计数跨 run 累积，长驻宿主（REPL/服务器）
+        // 会被历史消耗饿死（第二次 run 即 Limit）。
+        let src = "pub fn main() -> int {\n    let xs = [1, 2, 3, 4]\n    return len(xs)\n}\n";
+        let mut vm = Vm::new();
+        vm.run(compile(src), None, vec![]).expect("first run");
+        let first = vm.stats();
+        assert!(first.instructions > 0 && first.heap_bytes > 0);
+        // 限额设为「恰够一次 run」：跨 run 累积语义下第二次必挂
+        vm.set_limits(Limits {
+            max_instructions: first.instructions + 5,
+            max_heap_bytes: first.heap_bytes + 5,
+            ..Limits::default()
+        });
+        vm.run(compile(src), None, vec![])
+            .expect("second run must not be starved by history");
+        let second = vm.stats();
+        assert_eq!(second.instructions, first.instructions, "run 作用域重置");
+        assert_eq!(second.heap_bytes, first.heap_bytes, "run 作用域重置");
+        assert!(
+            second.total_instructions > second.instructions,
+            "单调累计保留"
+        );
+        assert!(second.total_allocated > second.heap_bytes, "单调累计保留");
     }
 
     #[test]
@@ -1638,15 +1797,16 @@ mod tests {
     use yoru_typeck::{Env, HostSig, Ty};
 
     fn int_sig(n: usize) -> HostSig {
-        HostSig { params: vec![Ty::Int; n], ret: Ty::Int }
+        HostSig {
+            params: vec![Ty::Int; n],
+            ret: Ty::Int,
+        }
     }
 
     /// 全管线装配：typeck（含宿主签名面）→ lower（宿主名单）→ 验证 → Instance
     fn compile_with_hosts(src: &str, hosts: &[(&str, HostSig)]) -> Instance {
         let program = parse_source(src).expect("parse");
-        let env = Env::core().with_host_fns(
-            hosts.iter().map(|(n, s)| (n.to_string(), s.clone())),
-        );
+        let env = Env::core().with_host_fns(hosts.iter().map(|(n, s)| (n.to_string(), s.clone())));
         let ds = yoru_typeck::check_program(&program, &env);
         assert!(ds.is_empty(), "typeck: {ds:#?}");
         let names: Vec<String> = hosts.iter().map(|(n, _)| n.to_string()).collect();
@@ -1662,13 +1822,10 @@ mod tests {
             &[("double", int_sig(1))],
         );
         let mut vm = Vm::new();
-        vm.register_host_fn(
-            "double",
-            Rc::new(|_vm, args| match args.first() {
-                Some(Value::Int(n)) => Ok(Value::Int(n * 2)),
-                other => unreachable!("typeck guarantees int, got {other:?}"),
-            }),
-        );
+        vm.register_host_fn("double", |_vm, args| match args.first() {
+            Some(Value::Int(n)) => Ok(Value::Int(n * 2)),
+            other => unreachable!("typeck guarantees int, got {other:?}"),
+        });
         let v = vm.run(inst, None, vec![]).expect("run");
         assert_eq!(v, Value::Int(42));
     }
@@ -1683,9 +1840,9 @@ mod tests {
         let mut vm = Vm::new();
         vm.register_host_fn(
             "boom",
-            Rc::new(|_vm: &mut Vm, _args: &[Value]| -> Result<Value, VmError> {
+            |_vm: &mut Vm, _args: &[Value]| -> Result<Value, VmError> {
                 panic!("host bug: disk on fire");
-            }),
+            },
         );
         let err = vm.run(inst, None, vec![]).unwrap_err();
         match err {
@@ -1746,13 +1903,10 @@ mod tests {
         };
         yoru_bytecode::verify_module(&m).expect("verify");
         let mut vm = Vm::new();
-        vm.register_host_fn(
-            "triple",
-            Rc::new(|_vm, args| match args.first() {
-                Some(Value::Int(n)) => Ok(Value::Int(n * 3)),
-                other => unreachable!("CallHost passes 1 arg, got {other:?}"),
-            }),
-        );
+        vm.register_host_fn("triple", |_vm, args| match args.first() {
+            Some(Value::Int(n)) => Ok(Value::Int(n * 3)),
+            other => unreachable!("CallHost passes 1 arg, got {other:?}"),
+        });
         let v = vm.run_at(Instance::new(m), 0, vec![]).expect("run");
         assert_eq!(v, Value::Int(21));
     }
@@ -1760,7 +1914,8 @@ mod tests {
     #[test]
     fn unknown_name_runtime_is_host_miss() {
         // 内建与宿主分派收束：未知名走宿主注册表（原 Y-R9021 语义并入 Y-H9000）
-        let program = parse_source("pub fn main() -> int {\n    return nope(1)\n}\n").expect("parse");
+        let program =
+            parse_source("pub fn main() -> int {\n    return nope(1)\n}\n").expect("parse");
         let m = yoru_bytecode::lower_with_hosts(&program, &["nope".to_string()]).expect("lower");
         let err = Vm::new().run(Instance::new(m), None, vec![]).unwrap_err();
         match err {
@@ -1808,6 +1963,22 @@ mod registry_tests {
         assert_eq!(n, 5);
     }
 
+    /// D1 值位归一 e2e（决策 78）：`map(xs, math.floor)` 在 lower 值位归一为
+    /// bare 名 Str 值，VM 调用期按名分派——与裸名 `map(xs, floor)` 同一条通道。
+    #[test]
+    fn module_qualified_builtin_as_value_runs() {
+        let src = concat!(
+            "import math from \"std\"\n\n",
+            "pub fn main() -> int {\n",
+            "    let fs = map([2.7, 1.2, 3.9], math.floor)\n",
+            "    return fs[0] * 100 + fs[1] * 10 + fs[2]\n",
+            "}\n",
+        );
+        let v = run_src(src).expect("value-position module builtin must run");
+        let Value::Int(n) = v else { panic!("int") };
+        assert_eq!(n, 213); // floor: 2, 1, 3
+    }
+
     /// print 变参面（决策 77）：任意值可打印，输出经 take_output 取走。
     #[test]
     fn print_variadic_any_values() {
@@ -1839,7 +2010,8 @@ mod registry_tests {
         assert!(vm.dispatch_builtin("floor", &[Value::Int(2)]).is_err());
         assert!(vm.dispatch_builtin("floor", &[f(f64::NAN)]).is_err());
         assert_eq!(
-            vm.dispatch_builtin("upper", &[Value::Str(Rc::from("hi"))]).unwrap(),
+            vm.dispatch_builtin("upper", &[Value::Str(Rc::from("hi"))])
+                .unwrap(),
             Value::Str(Rc::from("HI"))
         );
         // json.parse/stringify：T1 不透明透传（决策 28）
@@ -1850,8 +2022,6 @@ mod registry_tests {
             vm.dispatch_builtin("stringify", &[j]).unwrap(),
             Value::Str(Rc::from("{\"a\":1}"))
         );
-        assert!(vm
-            .dispatch_builtin("stringify", &[Value::Int(1)])
-            .is_err());
+        assert!(vm.dispatch_builtin("stringify", &[Value::Int(1)]).is_err());
     }
 }

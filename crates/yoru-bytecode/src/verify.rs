@@ -14,33 +14,104 @@ use crate::module::{Const, Lbc0Module};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyError {
-    BadOpcode { pc: usize, opcode: u32 },
-    JumpOutOfRange { pc: usize, target: i32, code_len: usize },
-    StackMismatch { pc: usize, expected: usize, got: usize },
-    StackUnderflow { pc: usize },
-    MaxStackMismatch { declared: u16, computed: usize },
-    ConstIndexOutOfBounds { pc: usize, index: u32, len: usize },
-    ConstKindMismatch { pc: usize, index: u32, want: &'static str },
-    ProtoIndexOutOfBounds { pc: usize, index: u32, len: usize },
-    UpvalueIndexOutOfBounds { pc: usize, index: u32, len: usize },
-    ImportIndexOutOfBounds { pc: usize, index: u32, len: usize },
-    StructIndexOutOfBounds { pc: usize, index: u32, len: usize },
-    FieldIndexOutOfBounds { pc: usize, index: u32, len: usize },
-    LocalIndexOutOfBounds { pc: usize, index: u32, locals: u16 },
-    UnreachableInstruction { pc: usize },
-    MissingTerminator { proto: usize },
-    FallthroughPastEnd { pc: usize },
-    EmptyCode { proto: usize },
-    TrailingConstRefs { proto: usize, extra: Vec<u32> },
-    MissingConstRefs { proto: usize, missing: Vec<u32> },
-    BadConstRef { proto: usize, ref_idx: u32 },
+    BadOpcode {
+        pc: usize,
+        opcode: u32,
+    },
+    JumpOutOfRange {
+        pc: usize,
+        target: i32,
+        code_len: usize,
+    },
+    StackMismatch {
+        pc: usize,
+        expected: usize,
+        got: usize,
+    },
+    StackUnderflow {
+        pc: usize,
+    },
+    MaxStackMismatch {
+        declared: u16,
+        computed: usize,
+    },
+    ConstIndexOutOfBounds {
+        pc: usize,
+        index: u32,
+        len: usize,
+    },
+    ConstKindMismatch {
+        pc: usize,
+        index: u32,
+        want: &'static str,
+    },
+    ProtoIndexOutOfBounds {
+        pc: usize,
+        index: u32,
+        len: usize,
+    },
+    UpvalueIndexOutOfBounds {
+        pc: usize,
+        index: u32,
+        len: usize,
+    },
+    ImportIndexOutOfBounds {
+        pc: usize,
+        index: u32,
+        len: usize,
+    },
+    StructIndexOutOfBounds {
+        pc: usize,
+        index: u32,
+        len: usize,
+    },
+    FieldIndexOutOfBounds {
+        pc: usize,
+        index: u32,
+        len: usize,
+    },
+    LocalIndexOutOfBounds {
+        pc: usize,
+        index: u32,
+        locals: u16,
+    },
+    UnreachableInstruction {
+        pc: usize,
+    },
+    MissingTerminator {
+        proto: usize,
+    },
+    FallthroughPastEnd {
+        pc: usize,
+    },
+    EmptyCode {
+        proto: usize,
+    },
+    TrailingConstRefs {
+        proto: usize,
+        extra: Vec<u32>,
+    },
+    MissingConstRefs {
+        proto: usize,
+        missing: Vec<u32>,
+    },
+    BadConstRef {
+        proto: usize,
+        ref_idx: u32,
+    },
 }
 
 impl std::fmt::Display for VerifyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VerifyError::BadOpcode { pc, opcode } => write!(f, "pc {pc}: reserved/unknown opcode 0x{opcode:02X}"),
-            VerifyError::JumpOutOfRange { pc, target, code_len } => {
+            VerifyError::BadOpcode { pc, opcode } => {
+                write!(f, "pc {pc}: reserved/unknown opcode 0x{opcode:02X}")
+            }
+            VerifyError::JumpOutOfRange {
+                pc,
+                target,
+                code_len,
+            } => {
                 write!(f, "pc {pc}: jump target {target} outside 0..{code_len}")
             }
             VerifyError::StackMismatch { pc, expected, got } => {
@@ -74,18 +145,33 @@ impl std::fmt::Display for VerifyError {
             VerifyError::LocalIndexOutOfBounds { pc, index, locals } => {
                 write!(f, "pc {pc}: local slot {index} outside 0..{locals}")
             }
-            VerifyError::UnreachableInstruction { pc } => write!(f, "pc {pc}: unreachable instruction"),
-            VerifyError::MissingTerminator { proto } => write!(f, "proto #{proto}: missing RETURN/RAISE terminator"),
-            VerifyError::FallthroughPastEnd { pc } => write!(f, "pc {pc}: fallthrough past end of code"),
+            VerifyError::UnreachableInstruction { pc } => {
+                write!(f, "pc {pc}: unreachable instruction")
+            }
+            VerifyError::MissingTerminator { proto } => {
+                write!(f, "proto #{proto}: missing RETURN/RAISE terminator")
+            }
+            VerifyError::FallthroughPastEnd { pc } => {
+                write!(f, "pc {pc}: fallthrough past end of code")
+            }
             VerifyError::EmptyCode { proto } => write!(f, "proto #{proto}: empty code"),
             VerifyError::TrailingConstRefs { proto, extra } => {
-                write!(f, "proto #{proto}: const_refs not referenced by code: {extra:?}")
+                write!(
+                    f,
+                    "proto #{proto}: const_refs not referenced by code: {extra:?}"
+                )
             }
             VerifyError::MissingConstRefs { proto, missing } => {
-                write!(f, "proto #{proto}: code references missing from const_refs: {missing:?}")
+                write!(
+                    f,
+                    "proto #{proto}: code references missing from const_refs: {missing:?}"
+                )
             }
             VerifyError::BadConstRef { proto, ref_idx } => {
-                write!(f, "proto #{proto}: const_refs entry {ref_idx} outside const pool")
+                write!(
+                    f,
+                    "proto #{proto}: const_refs entry {ref_idx} outside const pool"
+                )
             }
         }
     }
@@ -106,8 +192,14 @@ fn variant_has_payload(m: &Lbc0Module, c: &Const) -> Option<bool> {
 /// 操作数越界返回 None（由调用方转成结构化错误）。
 fn effect(op: Opcode, arg: u32, m: &Lbc0Module) -> Option<(usize, usize)> {
     Some(match op {
-        Opcode::Const | Opcode::Nil | Opcode::True | Opcode::False | Opcode::NewClosure
-        | Opcode::LoadLocal | Opcode::LoadUpvalue | Opcode::LoadImport => (0, 1),
+        Opcode::Const
+        | Opcode::Nil
+        | Opcode::True
+        | Opcode::False
+        | Opcode::NewClosure
+        | Opcode::LoadLocal
+        | Opcode::LoadUpvalue
+        | Opcode::LoadImport => (0, 1),
         Opcode::NewList => (arg as usize, 1),
         Opcode::NewMap => (arg as usize * 2, 1),
         Opcode::NewStruct => {
@@ -115,28 +207,60 @@ fn effect(op: Opcode, arg: u32, m: &Lbc0Module) -> Option<(usize, usize)> {
             (st.fields.len(), 1)
         }
         Opcode::StoreLocal | Opcode::StoreUpvalue | Opcode::Pop => (1, 0),
-        Opcode::Add | Opcode::Sub | Opcode::Mul | Opcode::Div | Opcode::Mod
-        | Opcode::Band | Opcode::Bor | Opcode::Bxor | Opcode::Shl | Opcode::Shr | Opcode::Ushr
-        | Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => (2, 1),
-        Opcode::Neg | Opcode::Not | Opcode::IsNone | Opcode::Unwrap | Opcode::ToString
-        | Opcode::IsErr | Opcode::Await | Opcode::Convert | Opcode::IsTag | Opcode::Payload
-        | Opcode::Suspend | Opcode::Resume => (1, 1),
-        Opcode::GetField => (1, 1),  // 弹基址压字段
-        Opcode::GetIndex => (2, 1),  // 弹 (索引, 容器) 压值
+        Opcode::Add
+        | Opcode::Sub
+        | Opcode::Mul
+        | Opcode::Div
+        | Opcode::Mod
+        | Opcode::Band
+        | Opcode::Bor
+        | Opcode::Bxor
+        | Opcode::Shl
+        | Opcode::Shr
+        | Opcode::Ushr
+        | Opcode::Eq
+        | Opcode::Ne
+        | Opcode::Lt
+        | Opcode::Le
+        | Opcode::Gt
+        | Opcode::Ge => (2, 1),
+        Opcode::Neg
+        | Opcode::Not
+        | Opcode::IsNone
+        | Opcode::Unwrap
+        | Opcode::ToString
+        | Opcode::IsErr
+        | Opcode::Await
+        | Opcode::Convert
+        | Opcode::IsTag
+        | Opcode::Payload
+        | Opcode::Suspend
+        | Opcode::Resume => (1, 1),
+        Opcode::GetField => (1, 1), // 弹基址压字段
+        Opcode::GetIndex => (2, 1), // 弹 (索引, 容器) 压值
         // 弹 (值, 索引, 容器) 压容器 —— 值语义原地变更（决策 13：refcount==1 时无观测别名）
         Opcode::SetIndex => (3, 1),
+        // 弹 (值, 索引) 变异局部槽 —— 无压出（SetIndexLocal 快路径，T2b）
+        Opcode::SetIndexLocal => (2, 0),
         Opcode::SetField => (2, 1),
         Opcode::Call | Opcode::CallMethod | Opcode::TailCall | Opcode::CallHost => {
             (arg as usize + 1, 1) // 弹 callee+args 压结果
         }
         Opcode::TagNew => {
             // 弹载荷（若变体有载荷）压变体值
-            (if variant_has_payload(m, m.consts.get(arg as usize)?)? { 1 } else { 0 }, 1)
+            (
+                if variant_has_payload(m, m.consts.get(arg as usize)?)? {
+                    1
+                } else {
+                    0
+                },
+                1,
+            )
         }
         Opcode::NewRange => (2, 1),
         Opcode::Slice => (3, 1),
-        Opcode::ForPrep => (1, 1),  // 弹 iterable 压迭代游标
-        Opcode::ForNext => (0, 1),  // 弹下个值→局部槽，压 bool；游标留栈（Lua 式）
+        Opcode::ForPrep => (1, 1), // 弹 iterable 压迭代游标
+        Opcode::ForNext => (0, 1), // 弹下个值→局部槽，压 bool；游标留栈（Lua 式）
         Opcode::Return | Opcode::Raise => (1, 0),
         Opcode::Jmp | Opcode::JmpIf | Opcode::JmpIfNot => (0, 0),
     })
@@ -157,7 +281,11 @@ fn analyze(code: &[Instr], m: &Lbc0Module) -> Result<(Vec<Option<usize>>, usize)
         }
         if let Some(prev) = depth_at[pc] {
             if prev != depth {
-                return Err(VerifyError::StackMismatch { pc, expected: prev, got: depth });
+                return Err(VerifyError::StackMismatch {
+                    pc,
+                    expected: prev,
+                    got: depth,
+                });
             }
             continue; // 已访问且深度一致
         }
@@ -171,7 +299,11 @@ fn analyze(code: &[Instr], m: &Lbc0Module) -> Result<(Vec<Option<usize>>, usize)
             Opcode::Jmp => {
                 let target = pc as i64 + instr.sarg() as i64;
                 if target < 0 || target as usize >= n {
-                    return Err(VerifyError::JumpOutOfRange { pc, target: instr.sarg(), code_len: n });
+                    return Err(VerifyError::JumpOutOfRange {
+                        pc,
+                        target: instr.sarg(),
+                        code_len: n,
+                    });
                 }
                 work.push((target as usize, depth));
                 continue;
@@ -179,7 +311,11 @@ fn analyze(code: &[Instr], m: &Lbc0Module) -> Result<(Vec<Option<usize>>, usize)
             Opcode::JmpIf | Opcode::JmpIfNot => {
                 let target = pc as i64 + instr.sarg() as i64;
                 if target < 0 || target as usize >= n {
-                    return Err(VerifyError::JumpOutOfRange { pc, target: instr.sarg(), code_len: n });
+                    return Err(VerifyError::JumpOutOfRange {
+                        pc,
+                        target: instr.sarg(),
+                        code_len: n,
+                    });
                 }
                 if depth == 0 {
                     return Err(VerifyError::StackUnderflow { pc });
@@ -214,7 +350,11 @@ fn analyze(code: &[Instr], m: &Lbc0Module) -> Result<(Vec<Option<usize>>, usize)
                 if matches!(op, Opcode::IsTag | Opcode::Payload | Opcode::TagNew)
                     && variant_has_payload(m, &m.consts[instr.arg as usize]).is_none()
                 {
-                    return Err(VerifyError::ConstKindMismatch { pc, index: instr.arg, want: "variant" });
+                    return Err(VerifyError::ConstKindMismatch {
+                        pc,
+                        index: instr.arg,
+                        want: "variant",
+                    });
                 }
             }
             Opcode::NewClosure => {
@@ -265,7 +405,10 @@ fn analyze(code: &[Instr], m: &Lbc0Module) -> Result<(Vec<Option<usize>>, usize)
                 index: instr.arg,
                 len: m.consts.len(),
             },
-            _ => VerifyError::BadOpcode { pc, opcode: op as u32 },
+            _ => VerifyError::BadOpcode {
+                pc,
+                opcode: op as u32,
+            },
         })?;
 
         let after = depth
@@ -292,7 +435,11 @@ pub fn verify_module(m: &Lbc0Module) -> Result<(), Vec<VerifyError>> {
         match c {
             Const::Proto(i) => {
                 if *i as usize >= m.protos.len() {
-                    errs.push(VerifyError::ProtoIndexOutOfBounds { pc: usize::MAX, index: *i, len: m.protos.len() });
+                    errs.push(VerifyError::ProtoIndexOutOfBounds {
+                        pc: usize::MAX,
+                        index: *i,
+                        len: m.protos.len(),
+                    });
                 }
             }
             Const::Variant { tag, variant } => match m.tags.get(*tag as usize) {
@@ -323,11 +470,7 @@ pub fn verify_module(m: &Lbc0Module) -> Result<(), Vec<VerifyError>> {
             Const::Int(_) | Const::Float(_) | Const::Bool(_) => {}
         }
     }
-    if errs.is_empty() {
-        Ok(())
-    } else {
-        Err(errs)
-    }
+    if errs.is_empty() { Ok(()) } else { Err(errs) }
 }
 
 /// 公共分析入口：对指定原型做栈深静态重算，返回最大栈深。
@@ -355,22 +498,35 @@ fn verify_proto(m: &Lbc0Module, pi: usize, p: &crate::module::Proto) -> Result<(
 
     // 局部槽 / upvalue 界检查
     for (pc, i) in p.code.iter().enumerate() {
-        if matches!(i.op, Opcode::LoadLocal | Opcode::StoreLocal | Opcode::ForPrep | Opcode::ForNext)
-            && i.arg >= p.locals as u32
+        if matches!(
+            i.op,
+            Opcode::LoadLocal | Opcode::StoreLocal | Opcode::ForPrep | Opcode::ForNext
+        ) && i.arg >= p.locals as u32
         {
-            return Err(VerifyError::LocalIndexOutOfBounds { pc, index: i.arg, locals: p.locals });
+            return Err(VerifyError::LocalIndexOutOfBounds {
+                pc,
+                index: i.arg,
+                locals: p.locals,
+            });
         }
         if matches!(i.op, Opcode::LoadUpvalue | Opcode::StoreUpvalue)
             && i.arg as usize >= p.upvalues.len()
         {
-            return Err(VerifyError::UpvalueIndexOutOfBounds { pc, index: i.arg, len: p.upvalues.len() });
+            return Err(VerifyError::UpvalueIndexOutOfBounds {
+                pc,
+                index: i.arg,
+                len: p.upvalues.len(),
+            });
         }
     }
 
     // 栈深静态重算（决策 9 第 3 项）：声明 == 计算
     let (depth_at, computed) = analyze(&p.code, m)?;
     if computed != p.max_stack as usize {
-        return Err(VerifyError::MaxStackMismatch { declared: p.max_stack, computed });
+        return Err(VerifyError::MaxStackMismatch {
+            declared: p.max_stack,
+            computed,
+        });
     }
 
     // 可达性：所有指令必须可达（canonical form；lowering 不产死码）
@@ -384,14 +540,22 @@ fn verify_proto(m: &Lbc0Module, pi: usize, p: &crate::module::Proto) -> Result<(
     let mut used: Vec<u32> = p
         .code
         .iter()
-        .filter(|i| matches!(i.op, Opcode::Const | Opcode::IsTag | Opcode::Payload | Opcode::TagNew))
+        .filter(|i| {
+            matches!(
+                i.op,
+                Opcode::Const | Opcode::IsTag | Opcode::Payload | Opcode::TagNew
+            )
+        })
         .map(|i| i.arg)
         .collect();
     used.sort_unstable();
     used.dedup();
     for r in &p.const_refs {
         if *r as usize >= m.consts.len() {
-            return Err(VerifyError::BadConstRef { proto: pi, ref_idx: *r });
+            return Err(VerifyError::BadConstRef {
+                proto: pi,
+                ref_idx: *r,
+            });
         }
     }
     let mut refs = p.const_refs.clone();

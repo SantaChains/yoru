@@ -33,13 +33,30 @@ pub enum DeclKind {
         body: TypeBody,
     },
     /// `tag Id = V1 | V2(T)`（决策 53 后数据分支的唯一声明形式）
-    Tag { name: String, params: Vec<String>, variants: Vec<Variant> },
+    Tag {
+        name: String,
+        params: Vec<String>,
+        variants: Vec<Variant>,
+    },
     /// `struct Id[T] { fields }`
-    Struct { name: String, params: Vec<String>, fields: Vec<Field> },
+    Struct {
+        name: String,
+        params: Vec<String>,
+        fields: Vec<Field>,
+    },
     /// `protocol Id[T] { fn sig... }`
-    Protocol { name: String, params: Vec<String>, fns: Vec<ProtocolFn> },
+    Protocol {
+        name: String,
+        params: Vec<String>,
+        fns: Vec<ProtocolFn>,
+    },
     /// `impl Proto for Id[T] { fn ... }`（决策 21：显式 impl）
-    Impl { proto: String, for_: String, params: Vec<String>, fns: Vec<FnDecl> },
+    Impl {
+        proto: String,
+        for_: String,
+        params: Vec<String>,
+        fns: Vec<FnDecl>,
+    },
     /// `const ID: T = expr`（编译期可折叠，决策 50）
     Const { name: String, ty: Type, value: Expr },
     /// 顶层函数（pub fn = 宿主入口，决策 32）
@@ -139,10 +156,22 @@ pub struct Stmt {
 
 #[derive(Debug, Clone)]
 pub enum StmtKind {
-    Let { mut_: bool, name: String, ty: Option<Type>, value: Expr },
+    Let {
+        mut_: bool,
+        name: String,
+        ty: Option<Type>,
+        value: Expr,
+    },
     Expr(Expr),
-    While { cond: Expr, body: Block },
-    For { var: String, iter: Expr, body: Block },
+    While {
+        cond: Expr,
+        body: Block,
+    },
+    For {
+        var: String,
+        iter: Expr,
+        body: Block,
+    },
     Return(Option<Expr>),
     Throw(Expr),
     Break,
@@ -199,32 +228,70 @@ pub enum ExprKind {
     Nil,
     Ident(String),
     /// `fn(params) = expr` / `fn(params) { block }`（lambda 参数类型可省）
-    Lambda { params: Vec<LamParam>, body: Box<FnBody> },
+    Lambda {
+        params: Vec<LamParam>,
+        body: Box<FnBody>,
+    },
     /// `if cond { } else ...`；else 为 None 时仅语句位合法（typeck 校验）
-    If { cond: Box<Expr>, then_: Block, else_: Option<Box<Expr>> },
-    Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
+    If {
+        cond: Box<Expr>,
+        then_: Block,
+        else_: Option<Box<Expr>>,
+    },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     /// `try expr`（决策 54：双传播）
     Try(Box<Expr>),
     /// `await expr`（仅宿主能力，14.5）
     Await(Box<Expr>),
-    Unary { op: UnOp, operand: Box<Expr> },
-    Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
-    Call { callee: Box<Expr>, args: Vec<Expr> },
+    Unary {
+        op: UnOp,
+        operand: Box<Expr>,
+    },
+    Binary {
+        op: BinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    Call {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
     /// `.field` 后缀（仅 struct 字段，19.2 集合 API 约定）
-    Field { base: Box<Expr>, field: String },
+    Field {
+        base: Box<Expr>,
+        field: String,
+    },
     /// 单元素 `xs[i]`（Map 取值 → V?，决策 55）或切片 `xs[a..b]`（决策 42）
-    Index { base: Box<Expr>, index: IndexKind },
+    Index {
+        base: Box<Expr>,
+        index: IndexKind,
+    },
     /// 后缀 `!` 解包（T? → T）
     Unwrap(Box<Expr>),
     /// `expr as T`（决策 26：唯一显式转换；19.2 EBNF 未列产式，按 19.5 示例补入 postfix 位）
-    Cast { operand: Box<Expr>, ty: Type },
+    Cast {
+        operand: Box<Expr>,
+        ty: Type,
+    },
     /// `Type { field: value, ..base }`（函数式字段更新，决策 41）
-    StructLit { name: String, type_args: Vec<Type>, inits: Vec<FieldInit>, spread: Option<Box<Expr>> },
+    StructLit {
+        name: String,
+        type_args: Vec<Type>,
+        inits: Vec<FieldInit>,
+        spread: Option<Box<Expr>>,
+    },
     List(Vec<Expr>),
     Map(Vec<(Expr, Expr)>),
     /// 裸 block（else 分支 / match arm block 的 AST 载体）
     Block(Block),
-    Assign { target: Box<Expr>, op: AssignOp, value: Box<Expr> },
+    Assign {
+        target: Box<Expr>,
+        op: AssignOp,
+        value: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -258,7 +325,10 @@ pub enum Pattern {
     /// 标识符（绑定或 nil/常量名）
     Bind(String),
     /// `Variant(p)` 单载荷绑定（多载荷变体载荷为 struct，绑定为整体）
-    Variant { name: String, payload: Option<String> },
+    Variant {
+        name: String,
+        payload: Option<String>,
+    },
     Wildcard,
 }
 
