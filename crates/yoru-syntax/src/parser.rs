@@ -570,8 +570,11 @@ impl Parser {
     }
 
     fn parse_fn_decl(&mut self) -> Option<FnDecl> {
-        self.bump(); // fn
+        // span 从 `fn` 关键字起（与 ProtocolFn 的 fstart 同口径）——
+        // F 线 fmt 依赖 FnDecl.span.start 定位 impl 体内 fn 的行首（29 号 §2.1
+        // API 缺口反向扩展）；此前从名字起，诊断定位亦少覆盖签名头。
         let start = self.peek().span;
+        self.bump(); // fn
         let name = self.expect_ident("function name").ok()?;
         let params = self.parse_type_params();
         let _ = params; // fn 泛型参数（19.2 fn_decl [ type_params ]）——当前仅记录

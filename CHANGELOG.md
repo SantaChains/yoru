@@ -6,9 +6,11 @@
 ## [Unreleased]
 
 ### Added
+- **yoru-fmt crate（2026-10-13，F 线 F1 核心，29 号裁决架构）**：token 空白重写器 + AST 区间指导布局 + span-blind 结构投影打印器 + `verify` 双断言（token 序列保真 + 结构投影保真 + 幂等）。注释/字符串/字面量经 span 逐字节保真；块体逐行缩进、struct_decl 字段与 match 臂逐行、行注释强制行尾、空行保留坍缩。三形态 spike + examples 11 篇全量双断言通过。CLI `yoru fmt` 属 F2。
 - **30 号战略定夺（2026-10-13，文档）**：主轴转工具链（F→R→D→L），语言层只清 Critical 实现债穿插推进；D-03（struct 算术 typeck 放行→VM 崩）定夺 **fail-fast** 方向；新登记 **V 线语义差分测试基建**（cargo-fuzz crash-fuzz + 双模式对拍）。设计文档侧更新，无代码变更。
 
 ### Fixed
+- **parser `FnDecl.span` 从 `fn` 关键字起**（2026-10-13，F1 配套 API 缺口修正）：此前从函数名起，与 `ProtocolFn`（从 `fn` 起）不一致；诊断定位顺带覆盖签名头。全量测试回归通过。
 - **决策 83（2026-10-12，F 线 formatter 前置 F0）**：注释进入词法流——`//`/`/* */`/`///` 全部词法可见（此前普通注释被静默丢弃，examples 70+ 行注释词法不可见）；换行延续判定对注释**穿透**，行尾注释不再截断延续表达式（`a + // c\nb` 与 `a + /// doc\nb` 此后者为既有潜伏解析错误，现正确求值）。注释文本经 span 逐字保留，为 `yoru fmt`（F1）与 LSP hover 提供地基。138 测试全绿。
 
 ### Fixed

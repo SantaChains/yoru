@@ -114,6 +114,13 @@ name = "yoru-ffi"
 version = "0.1.0"
 
 [[package]]
+name = "yoru-fmt"
+version = "0.1.0"
+dependencies = [
+ "yoru-syntax",
+]
+
+[[package]]
 name = "yoru-stdlib"
 version = "0.1.0"
 

@@ -8,6 +8,7 @@ members = [
     "crates/yoru-ffi",
     "crates/yoru-stdlib",
     "crates/yoru-cli",
+    "crates/yoru-fmt",
 ]
 
 [workspace.package]
