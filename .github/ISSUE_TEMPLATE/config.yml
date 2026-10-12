@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞披露
+    url: https://github.com/yoru-lang/yoru/security/advisories/new
+    about: 请勿用 issue 报告安全漏洞，走 SECURITY.md 定义的安全披露通道

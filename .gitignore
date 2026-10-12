@@ -1,0 +1,18 @@
+# Build
+/target
+
+# Editor / OS artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local probe / smoke scratch
+/_*.yoru
+/_*.txt
+
+# Workspace-local agent memory / scratch
+.workbuddy/
+*.tmp

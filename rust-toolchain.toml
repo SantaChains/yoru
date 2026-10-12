@@ -1,0 +1,5 @@
+# 组件钉住（决策 63）；channel=stable 不锁具体版本——MSRV 由
+# Cargo.toml 的 rust-version 声明 + CI msrv job 强制验证。
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]

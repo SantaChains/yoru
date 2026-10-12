@@ -1,0 +1,78 @@
+// Yoru 权威示范：19 号语法规范 v2 §19.5 原样（覆盖全部表面形式）
+// 扩展名 .yoru（2026-10-11 定名决议）；镜像类型存根为 .yorui
+
+import math from "std"                       // 具名导入，限定访问 math.sqrt
+import json as j from "std"                  // 可选别名
+import string from "std"                     // 字符串工具（决策 46）
+
+pub struct Vec3 {                            // pub = 对外可见
+    x: float
+    y: float
+    z: float
+}
+
+impl Add for Vec3 {                          // 协议显式 impl（决策 21）
+    fn add(a: Vec3, b: Vec3) -> Vec3 {
+        return Vec3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }
+    }
+}
+
+type EntityId = distinct int                 // 决策 23
+struct Node2[T] {                            // 多载荷变体走 struct（无元组，Tier C）
+    left: Tree[T]?
+    val: T
+}
+type Tree[T] = Node(Node2[T]) | Leaf         // 泛型 + 递归（决策 49）
+
+pub tag Err = NotFound | BadInput(string) | TooDeep
+
+pub fn norm(v: Vec3) -> float {              // 消费 math 导入（决策 43：import 必用）
+    return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+}
+
+pub fn config(src: string) -> Json {         // 消费 j 别名（决策 28：宿主 JSON 走 Json 类型）
+    return j.parse(src)
+}
+
+const MAX_DEPTH: int = 0xFF                  // 决策 38：hex 字面量，编译期折叠
+
+fn depth(t: Tree[int], d: int) -> Result[int, Err] {
+    if d > MAX_DEPTH {
+        return Err(TooDeep)
+    }
+    return match t {
+        Leaf -> Ok(d)
+        Node(p) -> Ok(try depth(p.left!, d + 1))     // try 双传播（决策 54）
+    }
+}
+
+pub fn summarize(ctx: Ctx, items: [Item]) -> Result[string, Err] {
+    let mut best: Item? = nil                // 局部推断，永不写类型
+    let total = items |> map(fn(it) = it.size) |> fold(0, fn(a, b) = a + b)
+    for it in items {                        // 唯一遍历循环
+        if it.size >= 1_000_000 {            // 决策 38：下划线分隔
+            continue
+        }
+        if it.size == 0 {
+            break                            // 无标签（决策 47）
+        }
+        if best == nil or it.size > best!.size {
+            best = it                        // T→T? 隐式加宽（决策 27）
+        }
+    }
+    if best != nil {
+        let b = best                         // 分支内 b: Item（决策 40 智能收窄）
+        let renamed = Item { ..b, title: "picked" }  // 函数式字段更新（决策 41）
+        await ctx.log("${renamed.title} of ${len(items)}")   // 插值唯一拼串
+    }
+    let mut m: [string: int] = [:]           // 空 map 须标注（决策 52）
+    m["a"] = 1                               // owned mut 索引赋值
+    let n = m["b"]                           // n: int?（决策 55）
+    let head = items[0..2]                   // 半开切片（决策 42）
+    let first = string.to_runes("你好")[0]   // rune 经迭代/切片获取，禁 s[i]（46）
+    let wrapped = (total as int) % len(items)        // floor-mod 恒非负（决策 44）
+    if n == nil {
+        return Err(NotFound)                 // 等价写法：throw NotFound
+    }
+    return Ok("head=${len(head)} first=${first} mod=${wrapped}")
+}

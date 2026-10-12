@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/yoru-syntax",
+    "crates/yoru-typeck",
+    "crates/yoru-bytecode",
+    "crates/yoru-vm",
+    "crates/yoru-ffi",
+    "crates/yoru-stdlib",
+    "crates/yoru-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# MSRV 声明（决策 67 条 2）：提升算 minor；声明值由 CI msrv job 强制验证。
+# 1.85 = edition 2024 的最低 rustc（语言绑定，非臆测）；2026-10-12 由 1.82
+# 提升——edition 2024 迁移的用户裁决（见 23 号 §23.4 / 当日 memory）。
+# 旧值 1.82 从未真实验证（CI 未激活），本次迁移时以 1.85.0 实测全绿补齐证据。
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[profile.release]
+lto = "thin"

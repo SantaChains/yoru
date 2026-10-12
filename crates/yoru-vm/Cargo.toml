@@ -1,0 +1,17 @@
+[package]
+name = "yoru-vm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+yoru-bytecode = { path = "../yoru-bytecode" }
+yoru-stdlib = { path = "../yoru-stdlib" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+yoru-syntax = { path = "../yoru-syntax" }
+yoru-typeck = { path = "../yoru-typeck" }

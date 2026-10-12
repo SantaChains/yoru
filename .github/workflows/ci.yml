@@ -1,0 +1,41 @@
+name: CI
+on: [push, pull_request]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo check --workspace
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+  # 决策 67 条 2：MSRV 是声明值，必须被 CI 强制验证（Cargo.toml rust-version）
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.82.0"
+      - run: cargo check --workspace
+
+  # 决策 63：CI 三件套含 fuzz-smoke；fuzz crate 于阶段 6 落地，
+  # 此 job 在 fuzz/ 目录存在前自动跳过（hashFiles 为空即 skip）。
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    if: ${{ hashFiles('fuzz/**') != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@cargo-fuzz
+      - run: cargo fuzz build --debug-assertions
