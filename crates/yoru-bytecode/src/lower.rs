@@ -985,20 +985,24 @@ impl Lowerer {
         });
         self.emit_arg(Opcode::NewClosure, pi as u32);
 
-        // 保存外层状态，切入 lambda
-        let outer = self.cur.take().expect("lambda outside fn");
-        let mut st = FnState {
-            proto_idx: pi,
-            scopes: vec![Vec::new()],
-            nslots: 0, // 参数由 declare_local 从 0 号槽分配
-            loops: Vec::new(),
-            captures: outer.captures.clone(),
-        };
-        st.captures.push(CaptureLayer {
+        // 保存外层状态，切入 lambda。captures 必须 **move**（D-24 根修）：
+        // 内层 lambda 的祖父捕获经 resolve_capture 递归把「传递 upvalue 条目」
+        // 登记进中间层 upvals——若克隆 captures，条目会写进克隆体并在恢复
+        // outer 时丢失（中间层 proto.upvalues 落空 → VM 取值越界 Y-I9004）。
+        let mut outer = self.cur.take().expect("lambda outside fn");
+        let mut captures = std::mem::take(&mut outer.captures);
+        captures.push(CaptureLayer {
             proto_idx: pi,
             locals: Vec::new(),
             upvals: Vec::new(),
         });
+        let st = FnState {
+            proto_idx: pi,
+            scopes: vec![Vec::new()],
+            nslots: 0, // 参数由 declare_local 从 0 号槽分配
+            loops: Vec::new(),
+            captures,
+        };
         self.cur = Some(st);
         for p in params {
             self.declare_local(&p.name);
@@ -1020,16 +1024,17 @@ impl Lowerer {
             self.emit_op(Opcode::Nil);
             self.emit_op(Opcode::Return);
         }
-        let ups: Vec<UpvalueDesc> = self
-            .cur
-            .as_ref()
-            .unwrap()
+        // 本层 upvalue 描述符落盘；随后摘掉本层、把 captures（含内层 lambda
+        // 在中间层新登记的传递条目）放回外层（D-24 根修的另一半）。
+        let mut st = self.cur.take().expect("lambda state");
+        let ups: Vec<UpvalueDesc> = st
             .captures
             .last()
             .map(|l| l.upvals.iter().map(|(_, _, d)| d.clone()).collect())
             .unwrap_or_default();
         self.m.protos[pi].upvalues = ups;
-
+        st.captures.pop();
+        outer.captures = st.captures;
         self.cur = Some(outer);
     }
 

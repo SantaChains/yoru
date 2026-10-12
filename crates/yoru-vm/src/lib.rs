@@ -1474,6 +1474,32 @@ mod tests {
         assert_eq!(t, 105 * 10 + 101);
     }
 
+    // D-24 根修回归：嵌套 lambda 祖父捕获。修复前 lower_lambda 克隆 captures，
+    // 内层 lambda 经 resolve_capture 登记进中间层的传递 upvalue 条目随克隆体
+    // 丢弃 → 中间层 proto.upvalues 落空 → VM Y-I9004。
+    #[test]
+    fn nested_lambda_grandparent_capture() {
+        // 内层 fn(y) = y + r 越过中间层直接捕获 fn(x) 外层的 r
+        let v = run_src(
+            "pub fn main() -> int {\n    let r = 7\n    let g = map([1, 2], fn(x: int) =\n        map([1, 2], fn(y: int) = y + r))\n    return g[1][1]\n}\n",
+        )
+        .expect("run");
+        let Value::Int(t) = v else { panic!("int") };
+        assert_eq!(t, 2 + 7);
+    }
+
+    #[test]
+    fn nested_lambda_for_var_per_iteration_snapshot() {
+        // for 循环变量作祖父捕获：每轮按值快照（决策 31），三轮互不串扰
+        let v = run_src(
+            "pub fn main() -> int {\n    let acc = 0\n    for r in range(0, 3) {\n        let row = map(range(0, 3), fn(x: int) =\n            map(range(0, 2), fn(y: int) = y + r))\n        acc = acc + row[2][1]\n    }\n    return acc\n}\n",
+        )
+        .expect("run");
+        let Value::Int(t) = v else { panic!("int") };
+        // row[2][1] = 1 + r，三轮 r=0/1/2 → 1+2+3 = 6
+        assert_eq!(t, 6);
+    }
+
     #[test]
     fn match_and_try_propagation() {
         let v = run_src(
