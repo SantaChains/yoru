@@ -78,16 +78,98 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("fmt") => {
+            // gofmt 风格（F2）：默认 stdout；-w 原地写入；--check 只校验。
+            // clig.dev 契约：0 = 已格式化、1 = 有差异/格式化失败、2 = 用法错误。
+            let mut write_in_place = false;
+            let mut check_only = false;
+            let mut files: Vec<String> = Vec::new();
+            for a in &args[2..] {
+                match a.as_str() {
+                    "-w" | "--write" => write_in_place = true,
+                    "--check" | "-l" => check_only = true,
+                    s if !s.starts_with('-') => files.push(s.to_string()),
+                    s => {
+                        eprintln!("error: unknown flag `{s}`");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            if files.is_empty() || (write_in_place && check_only) {
+                eprintln!("usage: yoru fmt [--check | -w] <file.yoru>...");
+                ExitCode::from(2)
+            } else {
+                fmt(&files, write_in_place, check_only)
+            }
+        }
         Some("--version") | Some("-V") => {
             println!("yoru 0.1.0 (frontend+typeck+bytecode+vm, spec 19 v2, LBC0 1.0)");
             ExitCode::SUCCESS
         }
         _ => {
             eprintln!(
-                "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] <file.yoru>      compile + execute via T1 VM\n  yoru --version"
+                "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] <file.yoru>      compile + execute via T1 VM\n  yoru fmt [--check | -w] <file.yoru>...              format source (stdout | in-place | check)\n  yoru --version"
             );
             ExitCode::from(2)
         }
+    }
+}
+
+/// 格式化（F2）。语义不变性由 yoru-fmt 的 D3 双断言 + 幂等验收协议在
+/// crate 层保证；CLI 层薄封装：逐文件 format，stdout / -w / --check 三形态。
+fn fmt(files: &[String], write_in_place: bool, check_only: bool) -> ExitCode {
+    let mut changed = 0usize;
+    let mut failed = 0usize;
+    for path in files {
+        let src = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: cannot read {path}: {e}");
+                failed += 1;
+                continue;
+            }
+        };
+        let out = match yoru_fmt::format(&src) {
+            Ok(o) => o,
+            Err(diags) => {
+                for d in &diags {
+                    print_diagnostic(&src, d);
+                }
+                eprintln!("error: {path}: not formatted (parse error) — fmt only handles valid files");
+                failed += 1;
+                continue;
+            }
+        };
+        let differs = out != src;
+        if check_only {
+            if differs {
+                println!("{path}: needs formatting");
+                changed += 1;
+            }
+        } else if write_in_place {
+            if differs {
+                if let Err(e) = std::fs::write(path, &out) {
+                    eprintln!("error: cannot write {path}: {e}");
+                    failed += 1;
+                    continue;
+                }
+                changed += 1;
+            }
+        } else {
+            print!("{out}");
+        }
+    }
+    if check_only {
+        // 部分文件有差异 → 1（CI 可直接拦截）；读取/解析失败 → 1
+        if changed > 0 || failed > 0 {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        }
+    } else if failed > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     }
 }
 

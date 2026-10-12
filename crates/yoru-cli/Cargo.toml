@@ -10,6 +10,7 @@ yoru-syntax = { path = "../yoru-syntax" }
 yoru-typeck = { path = "../yoru-typeck" }
 yoru-bytecode = { path = "../yoru-bytecode" }
 yoru-vm = { path = "../yoru-vm" }
+yoru-fmt = { path = "../yoru-fmt" }
 
 [[bin]]
 name = "yoru"

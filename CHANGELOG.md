@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- **`yoru fmt` CLI（2026-10-13，F 线 F2）**：gofmt 风格三形态——默认 stdout（管道组合）、`-w` 原地写入、`--check` 校验（有差异 exit 1，CI 可直接挂）。语义不变性以最强形态验收：examples 11 篇格式化前后 `yoru run` 输出逐位一致（diff 执行结果而非 diff 文本）；解析错误文件诚实拒绝（fmt 只对合法文件负责）。
 - **yoru-fmt crate（2026-10-13，F 线 F1 核心，29 号裁决架构）**：token 空白重写器 + AST 区间指导布局 + span-blind 结构投影打印器 + `verify` 双断言（token 序列保真 + 结构投影保真 + 幂等）。注释/字符串/字面量经 span 逐字节保真；块体逐行缩进、struct_decl 字段与 match 臂逐行、行注释强制行尾、空行保留坍缩。三形态 spike + examples 11 篇全量双断言通过。CLI `yoru fmt` 属 F2。
 - **30 号战略定夺（2026-10-13，文档）**：主轴转工具链（F→R→D→L），语言层只清 Critical 实现债穿插推进；D-03（struct 算术 typeck 放行→VM 崩）定夺 **fail-fast** 方向；新登记 **V 线语义差分测试基建**（cargo-fuzz crash-fuzz + 双模式对拍）。设计文档侧更新，无代码变更。
 
