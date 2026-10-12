@@ -1,0 +1,40 @@
+// 09 · 计算几何谓词（Yoru 示例套件 · 计算几何）
+// 运行：yoru run examples/math/09_comp_geom.yoru
+// 覆盖：struct Pt、orient（二维叉积转向测试：>0 左转 / <0 右转 / =0 共线）、
+//       proper 线段相交（4 orientation 符号测试）、全 int 算术（几何谓词的
+//       精确性基石——无浮点误差）、自由函数组合。
+// 判读：orient(a,b,c) = -12 → c 在 ab 右侧；ab×cd 真（交点 (3.6, 1.2)）；
+//       ac×de 假（de 整体在 ac 上方）。输出已人工验算。
+// 注：proper 测试不含共线/端点接触（零叉积情形需额外处理，见 24 号文档
+//       备注）；射线法 PIP 与 AABB 见 10 篇。
+
+struct Pt {
+    x: int
+    y: int
+}
+
+// 二维叉积（b-a）×（c-a）：符号即转向，大小即平行四边形面积
+fn orient(a: Pt, b: Pt, c: Pt) -> int {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+// proper 相交：d1,d2 异号且 d3,d4 异号（严格穿越，不含接触/共线）
+fn seg_cross(a: Pt, b: Pt, c: Pt, d: Pt) -> bool {
+    let d1 = orient(a, b, c)
+    let d2 = orient(a, b, d)
+    let d3 = orient(c, d, a)
+    let d4 = orient(c, d, b)
+    return (d1 > 0) != (d2 > 0) and (d3 > 0) != (d4 > 0)
+}
+
+pub fn main() -> int {
+    let a = Pt { x: 0, y: 0 }
+    let b = Pt { x: 6, y: 2 }
+    let c = Pt { x: 6, y: 0 }
+    let d = Pt { x: 2, y: 2 }
+    let e = Pt { x: 0, y: 5 }
+    print("orient(a,b,c) = ${orient(a, b, c)}")
+    print("ab x cd = ${seg_cross(a, b, c, d)}")
+    print("ac x de = ${seg_cross(a, c, d, e)}")
+    return 0
+}

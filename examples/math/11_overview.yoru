@@ -1,0 +1,77 @@
+// 11 · 语法总览（Yoru 示例套件 · 剩余已确认特性一网打尽）
+// 运行：yoru run examples/math/11_overview.yoru
+// 覆盖：import 别名（import json as j）、distinct 新类型 + as 双向转换、
+//       tag 错误枚举、Result + Ok/Err 构造 + try 传播（调用点解包 T?）、
+//       位运算（& | ^ << >>）、map 字面量 + 索引赋值 + keys/values、
+//       string 模块（to_runes / upper）、json.parse / stringify 往返、
+//       parse_int / parse_float、切片 [1..3]、hex / 下划线 / 指数浮点字面量、
+//       rune 迭代、let _ 显式丢弃。
+// 注：throw 在运行期中止进程（`raised: <variant N>`，变体名丢失，见 24 号
+//       文档 D-06），故本篇只在注释路径出现，不热手演示；Result 的消费面
+//       （match/!/== nil）在本构建全部被拒，唯一通道是 try 传播（D-07）。
+
+import json as j from "std"
+import string from "std"
+
+// distinct：编译期独立类型，与 int 显式互转（决策 23/26）
+type UserId = distinct int
+
+// 错误枚举（throw 的载荷类型）
+tag Err = NotFound | BadInput(string)
+
+// try 传播链：parse_int 的 T? 在调用点解包，负数路径 throw（运行期 raised）
+fn double(s: string) -> Result[int, Err] {
+    let v = parse_int(s)!
+    if v < 0 {
+        throw BadInput(s)
+    }
+    return Ok(v + v)
+}
+
+fn quadruple(s: string) -> Result[int, Err] {
+    let d = try double(s)
+    return Ok(d + d)
+}
+
+// Result 演示收在 fn 内（try 须在 Result 返回函数内；main 返回 int 保持
+// CLI 尾部输出干净）
+fn result_demo() -> Result[int, Err] {
+    let q = try quadruple("21")
+    print("quadruple(21) = ${q}")
+    let jv = j.parse("{\"hp\": 100, \"name\": \"yoru\"}")
+    print("json: ${j.stringify(jv)}")
+    return Ok(0)
+}
+
+pub fn main() -> int {
+    // distinct 往返
+    let uid = 42 as UserId
+    print("uid = ${uid as int}")
+
+    // 位运算（移位越界抛错，决策 37）
+    print("bits: ${5 & 3} ${5 | 3} ${5 ^ 3} ${1 << 4} ${256 >> 2}")
+
+    // map：字面量 + 索引赋值 + keys/values（插入序）
+    let mut m: [string: int] = [:]
+    m["hp"] = 100
+    m["mp"] = 50
+    print("map: ${len(keys(m))} keys, first=${values(m)[0]}")
+
+    // 字符串与 rune（string 模块；禁 s[i]，决策 46）
+    print("upper: ${string.upper("yoru")}")
+    let runes = string.to_runes("你好")
+    print("runes: ${len(runes)}")
+    let mut n = 0
+    for r in runes {
+        n = n + 1
+    }
+    print("rune count: ${n}")
+
+    // 解析 + 切片 + 字面量（hex / 下划线 / 指数）
+    let pf = parse_float("2.5")!
+    let xs = [10, 20, 30, 40]
+    print("parse: ${pf} slice: ${xs[1..3]} hex: ${0xFF} under: ${1_000_000} exp: ${1.5e3}")
+
+    let _ = result_demo()
+    return 0
+}

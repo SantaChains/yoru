@@ -1,0 +1,52 @@
+// 10 · 射线法 PIP（Yoru 示例套件 · 计算几何）
+// 运行：yoru run examples/math/10_pip.yoru
+// 覆盖：struct Pt、orient 复用（自包含重声明）、射线法点在多边形内判定
+//       （奇偶规则）、全 int 叉积判据——x_cross > p.x ⟺ (orient > 0) == (Δy > 0)，
+//       无除法无浮点（几何精确性）、for in list + 前驱穿线（prev 环回首点）、
+//       bool 奇偶累加。
+// 判据推导：边 (prev→a) 跨越 p 右侧水平射线 ⟺ (a.y > p.y) != (prev.y > p.y)；
+//       此时交点在 p 右侧 ⟺ orient(prev, a, p) 与 (a.y - prev.y) 同号。
+// 场景：三角形 (0,0) (6,0) (3,5)；判据不要求凸性（奇偶规则），非凸多边形
+//       同样适用。输出已人工验算。
+
+struct Pt {
+    x: int
+    y: int
+}
+
+// 二维叉积（b-a）×（c-a）：符号即转向
+fn orient(a: Pt, b: Pt, c: Pt) -> int {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+// 射线法 PIP：prev 初始化为末点，for 遍历即覆盖全部 n 条边（含闭合边）
+fn inside(poly: [Pt], p: Pt) -> bool {
+    let n = len(poly)
+    let mut prev = poly[n - 1]
+    let mut cnt = 0
+    for a in poly {
+        if (a.y > p.y) != (prev.y > p.y) {
+            let s = orient(prev, a, p)
+            if (s > 0) == (a.y - prev.y > 0) {
+                cnt = cnt + 1
+            }
+        }
+        prev = a
+    }
+    return cnt % 2 == 1
+}
+
+pub fn main() -> int {
+    let tri = [
+        Pt { x: 0, y: 0 },
+        Pt { x: 6, y: 0 },
+        Pt { x: 3, y: 5 },
+    ]
+    let t1 = Pt { x: 1, y: 1 }
+    let t2 = Pt { x: 4, y: 4 }
+    let t3 = Pt { x: 3, y: -1 }
+    print("inside(1,1) = ${inside(tri, t1)}")
+    print("inside(4,4) = ${inside(tri, t2)}")
+    print("inside(3,-1) = ${inside(tri, t3)}")
+    return 0
+}
