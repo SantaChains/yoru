@@ -1710,33 +1710,34 @@ impl<'e> Checker<'e> {
                 other
             }
             (Ty::Named { name, .. }, _) if lt.same(rt) => {
+                // D-03 fail-fast（30 号定夺）：协议算术的执行管线未接入
+                // （lower 发裸 Add、VM Y-R9007 崩）——**已 impl 也拒绝**：
+                // spec 承诺兑现前放行 = 虚假承诺，违 strict 健全（静态通过
+                // 则运行期成立）。随泛型批次接入协议调用后此臂再放行。
                 let proto = match op {
                     BinOp::Add => "Add",
                     BinOp::Sub => "Sub",
                     BinOp::Mul => "Mul",
                     _ => "Div",
                 };
-                if self
+                let has_impl = self
                     .decls
                     .impls
                     .iter()
-                    .any(|i| i.proto == proto && i.for_ == *name)
-                {
-                    lt.clone()
+                    .any(|i| i.proto == proto && i.for_ == *name);
+                let detail = if has_impl {
+                    format!(
+                        "类型 `{name}` 已 impl `{proto}`，但协议算术的执行管线尚未实现（随泛型批次接入，30 号 D-03 fail-fast）——已 impl 的算术同样编译期拒绝"
+                    )
                 } else {
-                    self.err(
-                        d(
-                            "Y-T0022",
-                            Severity::Error,
-                            format!("类型 `{name}` 未 impl `{proto}`，运算符不可用（决策 21）"),
-                            span,
-                        )
-                        .with_suggestion(format!(
-                            "显式实现：`impl {proto} for {name} {{ fn ... }}`"
-                        )),
-                    );
-                    lt.clone()
-                }
+                    format!("类型 `{name}` 未 impl `{proto}`，运算符不可用（决策 21）")
+                };
+                self.err(
+                    d("Y-T0022", Severity::Error, detail, span).with_suggestion(format!(
+                        "改用自由函数：`fn add(a: {name}, b: {name}) -> {name}`"
+                    )),
+                );
+                lt.clone()
             }
             _ => {
                 self.err(self.mismatch(lt.clone(), rt.clone(), span));

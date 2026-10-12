@@ -131,6 +131,40 @@ mod tests {
     }
 
     #[test]
+    fn struct_arith_fail_fast_even_with_impl() {
+        // D-03 fail-fast（30 号定夺）：协议算术执行管线未接入前，**已 impl**
+        // 的 struct 算术同样编译期拒绝——放行 = 虚假承诺（lower 发裸 Add、
+        // VM Y-R9007 运行期崩），违 strict 健全。诊断区分已 impl / 未 impl
+        // 两种情形，统一 Y-T0022。随泛型批次接入协议调用后此测试换面。
+        let src = concat!(
+            "struct V { x: float, y: float }\n",
+            "impl Add for V {\n",
+            "    fn add(a: V, b: V) -> V { return V { x: a.x + b.x, y: a.y + b.y } }\n",
+            "}\n",
+            "fn f(a: V, b: V) -> float {\n",
+            "    let c = a + b\n",
+            "    return c.x\n",
+            "}\n",
+        );
+        let bad = errors(src);
+        assert_eq!(codes(&bad), vec!["Y-T0022"], "{bad:#?}");
+        assert!(
+            bad[0].message.contains("已 impl"),
+            "已 impl 情形诊断须明示管线未接入: {}",
+            bad[0].message
+        );
+        // 未 impl：原语义保持（决策 21）
+        let src2 = "struct P { x: float, y: float }\nfn f(a: P, b: P) -> float {\n    let c = a + b\n    return c.x\n}\n";
+        let bad2 = errors(src2);
+        assert_eq!(codes(&bad2), vec!["Y-T0022"], "{bad2:#?}");
+        assert!(
+            bad2[0].message.contains("未 impl"),
+            "未 impl 情形诊断: {}",
+            bad2[0].message
+        );
+    }
+
+    #[test]
     fn unwrap_on_narrowed_ident_allowed() {
         // D-04（26 号登记）：nil 收窄（决策 40）后 `o!` 是恒等解包，
         // 曾被 Y-T0004 误拦且诊断自相矛盾（帮助文本自己建议先做 nil 检查）。

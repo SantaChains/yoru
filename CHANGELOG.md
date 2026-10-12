@@ -12,6 +12,7 @@
 - **30 号战略定夺（2026-10-13，文档）**：主轴转工具链（F→R→D→L），语言层只清 Critical 实现债穿插推进；D-03（struct 算术 typeck 放行→VM 崩）定夺 **fail-fast** 方向；新登记 **V 线语义差分测试基建**（cargo-fuzz crash-fuzz + 双模式对拍）。设计文档侧更新，无代码变更。
 
 ### Fixed
+- **struct 算术 fail-fast（2026-10-13，D-03 Critical，30 号定夺）**：已 `impl Add/Sub/Mul/Div` 的 struct 算术不再「typeck 放行 → 运行期 Y-R9007 崩」——协议算术执行管线未接入（随泛型批次）前，`check_arith` 对 Named 同型算术一律编译期拒绝（Y-T0022），诊断区分「已 impl 但管线未实现」与「未 impl」两情形并给出自由函数建议。strict 健全承诺（静态通过则运行期成立）恢复完整。
 - **lower 内建名单漂移根修（2026-10-13，get/get_or 落地时实证）**：`BUILTIN_FNS` 手写 frozen 镜像（注释声称有 `registry_mirror_locked` 对账测试，实际不存在）与注册表脱节——新增内建裸名调用撞 Y-T0913。改为从 `yoru-stdlib` 注册表派生（LazyLock HashSet，单一事实源构造保证一致），对账测试不再需要。
 - **嵌套 lambda 祖父捕获崩溃（2026-10-13，D-24 Critical 根修）**：内层 lambda 捕获非直接父级的变量不再报 `Y-I9004`——根因是 `lower_lambda` 以 clone 继承捕获层，内层经 resolve_capture 登记进中间层的传递 upvalue 条目随克隆体在恢复外层状态时丢失（中间层 `proto.upvalues` 落空）；改 move 语义后穿透捕获正确。for 循环变量作祖父捕获时每轮按值快照（决策 31）。回归测试 +2，examples 11/11，全仓 160 测试全绿。
 - **parser `FnDecl.span` 从 `fn` 关键字起**（2026-10-13，F1 配套 API 缺口修正）：此前从函数名起，与 `ProtocolFn`（从 `fn` 起）不一致；诊断定位顺带覆盖签名头。全量测试回归通过。
