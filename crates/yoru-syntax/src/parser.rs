@@ -1216,6 +1216,11 @@ impl Parser {
     fn parse_postfix(&mut self) -> Expr {
         let mut expr = self.parse_primary();
         loop {
+            // D-02：插值子解析器 token 切片无 Eof 哨兵，peek() 钳制回末 token
+            // 会使本循环永不前进 → pos 越界即断（wrap_guard 触顶前的死自旋根因）。
+            if self.pos >= self.tokens.len() {
+                break;
+            }
             if !self.wrap_guard() {
                 break;
             }
@@ -1485,7 +1490,15 @@ impl Parser {
             .into_iter()
             .map(|p| match p {
                 StrPart::Lit(s) => StrItem::Lit(s),
-                StrPart::Interp(tokens) => {
+                StrPart::Interp(mut tokens) => {
+                    // D-02（26 号登记）：子解析器 token 切片必须以 Eof 哨兵收尾。
+                    // lexer 产物恒以 Eof 结尾，但插值切片是截取的裸序列——无 Eof 时
+                    // at_eof() 恒假、bump() 钳制在 len-1，postfix 循环永不前进，
+                    // 直至 Y-S9502 wrap 预算触顶（`${o!}` 以 `!` 结尾即复现）。
+                    if let Some(last) = tokens.last() {
+                        let span = last.span;
+                        tokens.push(Token { kind: TokenKind::Eof, span });
+                    }
                     let mut sub = Parser {
                         tokens,
                         pos: 0,

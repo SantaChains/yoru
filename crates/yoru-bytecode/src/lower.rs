@@ -207,6 +207,12 @@ fn expr_always_terminates(e: &ast::Expr) -> bool {
     }
 }
 
+/// 链式赋值目标访问链的一步（D-06/07/08/09）：字段名或索引表达式。
+enum LvStep<'a> {
+    Field(String),
+    Index(&'a ast::Expr),
+}
+
 impl Lowerer {
     fn new(host_fns: HashSet<String>) -> Lowerer {
         Lowerer {
@@ -619,17 +625,22 @@ impl Lowerer {
                 *produced = false;
             }
             ast::StmtKind::Expr(e) => {
-                // if 无 else 在语句位 = void（不产值不 POP）；其余表达式恒产 1 值
+                // if 无 else 在语句位 = void（不产值不 POP）
                 let is_void_if = matches!(&e.kind, ast::ExprKind::If { else_: None, .. });
                 if is_void_if {
                     if let ast::ExprKind::If { cond, then_, .. } = &e.kind {
                         self.lower_if(cond, then_, None, false, e.span);
                     }
+                    *produced = false;
+                } else if _value_pos {
+                    // 块尾表达式 = 块值（D-17：if 表达式/块值语义，19.2）——留在栈上
+                    self.lower_expr(e);
+                    *produced = true;
                 } else {
                     self.lower_expr(e);
                     self.emit_op(Opcode::Pop);
+                    *produced = false;
                 }
-                *produced = false;
             }
             ast::StmtKind::While { cond, body } => {
                 self.lower_loop(cond, body);
@@ -1480,28 +1491,21 @@ impl Lowerer {
                 self.emit_arg(Opcode::StoreLocal, slot as u32);
                 self.emit_op(Opcode::Nil);
             }
-            ast::ExprKind::Field { base, field } => {
-                let fid = self.field_id(field);
-                self.lower_lvalue_prefix(base);
-                match bin {
-                    None => {
-                        // 栈: [container] → value → [container, value]
-                        self.lower_expr(value);
-                        self.emit_arg(Opcode::SetField, fid); // 弹 (值,容器) 压容器
-                        self.emit_op(Opcode::Pop); // 丢弃容器
-                    }
-                    Some(b) => {
-                        let t = self.declare_local("$fld");
-                        self.emit_arg(Opcode::StoreLocal, t as u32);
-                        self.emit_arg(Opcode::LoadLocal, t as u32);
-                        self.emit_arg(Opcode::GetField, fid);
-                        self.lower_expr(value);
-                        self.emit_op(b);
-                        self.emit_arg(Opcode::LoadLocal, t as u32);
-                        self.emit_arg(Opcode::SetField, fid);
-                        self.emit_op(Opcode::Pop);
+            ast::ExprKind::Field { .. } => {
+                // D-06/D-07：统一链式回写——容器入临时槽，变异后写回根槽位。
+                // 旧实现 Pop 丢弃栈上容器副本（未回写）→ 简单赋值静默 no-op、
+                // 复合赋值操作数错位 Y-R9012。
+                if let Some((root, steps)) = self.lvalue_chain(target) {
+                    if let Some(slot) = self.lookup_local(&root) {
+                        self.lower_chain_assign(slot, &steps, bin, value);
+                        self.emit_op(Opcode::Nil);
+                        return;
                     }
                 }
+                // 根非局部（import 等）：typeck 已拦（值语义：外层绑定不可变），保栈平衡
+                self.lower_lvalue_prefix(target);
+                self.lower_expr(value);
+                self.emit_op(Opcode::Pop);
                 self.emit_op(Opcode::Nil);
             }
             ast::ExprKind::Index { base, index } => match index {
@@ -1509,7 +1513,6 @@ impl Lowerer {
                     // 快路径：base 是局部变量 → SetIndexLocal 对槽位原地变异。
                     // 走通用 SetIndex 时栈上容器副本与局部槽双重引用，COW 互斥
                     // 判定（决策 13）恒不成立 → 每次赋值整表拷贝（T2b 基准实测）。
-                    // 复合赋值（+=）仍走原路径（需读改写三temp，罕见）。
                     if bin.is_none() {
                         if let ast::ExprKind::Ident(name) = &base.kind {
                             if let Some(slot) = self.lookup_local(name) {
@@ -1521,30 +1524,20 @@ impl Lowerer {
                             }
                         }
                     }
-                    self.lower_lvalue_prefix(base);
-                    self.lower_expr(idx);
-                    match bin {
-                        None => {
-                            self.lower_expr(value);
-                            self.emit_arg(Opcode::SetIndex, 0); // 弹 (值,索引,容器) 压容器
-                            self.emit_op(Opcode::Pop);
-                        }
-                        Some(b) => {
-                            let tc = self.declare_local("$ic");
-                            self.emit_arg(Opcode::StoreLocal, tc as u32);
-                            let ti = self.declare_local("$ii");
-                            self.emit_arg(Opcode::StoreLocal, ti as u32);
-                            self.emit_arg(Opcode::LoadLocal, tc as u32);
-                            self.emit_arg(Opcode::LoadLocal, ti as u32);
-                            self.emit_op(Opcode::GetIndex);
-                            self.lower_expr(value);
-                            self.emit_op(b);
-                            self.emit_arg(Opcode::LoadLocal, tc as u32);
-                            self.emit_arg(Opcode::LoadLocal, ti as u32);
-                            self.emit_arg(Opcode::SetIndex, 0);
-                            self.emit_op(Opcode::Pop);
+                    // D-08/D-09：统一链式回写——下降逐层取容器（索引入临时防重复求值
+                    // 副作用）→ 内层变异 → 上升逐层 SetIndex → 根槽位回写。
+                    // 旧实现复合路径两临时互换（Y-R9013）、链式路径 Pop 丢副本（no-op）。
+                    if let Some((root, steps)) = self.lvalue_chain(target) {
+                        if let Some(slot) = self.lookup_local(&root) {
+                            self.lower_chain_assign(slot, &steps, bin, value);
+                            self.emit_op(Opcode::Nil);
+                            return;
                         }
                     }
+                    self.lower_lvalue_prefix(base);
+                    self.lower_expr(idx);
+                    self.lower_expr(value);
+                    self.emit_op(Opcode::Pop);
                     self.emit_op(Opcode::Nil);
                 }
                 ast::IndexKind::Range(..) => {
@@ -1564,6 +1557,151 @@ impl Lowerer {
     }
 
     /// lvalue 前缀（除最后一段外的访问链）：压最终容器。
+    /// 收集赋值目标的访问链：`root[a].b[c]` → (root, [Index(a), Field(b), Index(c)])。
+    /// 根必须是纯 Ident；链上只允许 Field/Index；Range 切片不可作目标（None）。
+    fn lvalue_chain<'a>(&self, target: &'a ast::Expr) -> Option<(String, Vec<LvStep<'a>>)> {
+        let mut steps = Vec::new();
+        let mut cur = target;
+        loop {
+            match &cur.kind {
+                ast::ExprKind::Field { base, field } => {
+                    steps.push(LvStep::Field(field.clone()));
+                    cur = base;
+                }
+                ast::ExprKind::Index { base, index } => match index {
+                    ast::IndexKind::Single(idx) => {
+                        steps.push(LvStep::Index(idx));
+                        cur = base;
+                    }
+                    ast::IndexKind::Range(..) => return None,
+                },
+                ast::ExprKind::Ident(name) => {
+                    steps.reverse();
+                    return Some((name.clone(), steps));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// 统一链式赋值（D-06/07/08/09，26 号登记）：
+    /// `root[i0].f[i1] (=|+=) value` →
+    ///   ① c0 = 根副本；
+    ///   ② 下降：c_{k+1} = c_k[step_k]（索引入临时，上升阶段免重复求值副作用）；
+    ///   ③ 内层变异（复合 = 读改写，值经临时重排保证 SetField/SetIndex 操作数序）；
+    ///   ④ 上升：c_k = SetField/SetIndex(c_k, step_k, c_{k+1})；
+    ///   ⑤ 根槽位回写。
+    /// 值语义由「副本入临时 + 写回槽位」保证（决策 13 COW；决策 80 同族）。
+    fn lower_chain_assign<'a>(
+        &mut self,
+        slot: u16,
+        steps: &[LvStep<'a>],
+        bin: Option<Opcode>,
+        value: &ast::Expr,
+    ) {
+        // ① c0 = 根容器副本
+        self.emit_arg(Opcode::LoadLocal, slot as u32);
+        let c0 = self.declare_local("$c0");
+        self.emit_arg(Opcode::StoreLocal, c0 as u32);
+        // ② 下降
+        let mut cs = vec![c0];
+        let mut its: Vec<Option<u16>> = Vec::new(); // its[k] = 第 k 层 Index 索引临时
+        for k in 0..steps.len() - 1 {
+            self.emit_arg(Opcode::LoadLocal, cs[k] as u32);
+            match &steps[k] {
+                LvStep::Field(name) => {
+                    let fid = self.field_id(name);
+                    self.emit_arg(Opcode::GetField, fid);
+                    its.push(None);
+                }
+                LvStep::Index(idx) => {
+                    self.lower_expr(idx);
+                    let t = self.declare_local("$ci");
+                    self.emit_arg(Opcode::StoreLocal, t as u32);
+                    its.push(Some(t));
+                    self.emit_arg(Opcode::LoadLocal, t as u32);
+                    self.emit_op(Opcode::GetIndex);
+                }
+            }
+            let cn = self.declare_local("$cd");
+            self.emit_arg(Opcode::StoreLocal, cn as u32);
+            cs.push(cn);
+        }
+        // ③ 内层变异
+        let last = steps.len() - 1;
+        let cv = self.declare_local("$cv");
+        self.emit_arg(Opcode::LoadLocal, cs[last] as u32);
+        match &steps[last] {
+            LvStep::Field(name) => {
+                let fid = self.field_id(name);
+                match bin {
+                    None => self.lower_expr(value),
+                    Some(b) => {
+                        self.emit_arg(Opcode::GetField, fid);
+                        self.lower_expr(value);
+                        self.emit_op(b);
+                        // SetField 需 [容器, 值]：结果经临时重排
+                        let tv = self.declare_local("$tv");
+                        self.emit_arg(Opcode::StoreLocal, tv as u32);
+                        self.emit_arg(Opcode::LoadLocal, cs[last] as u32);
+                        self.emit_arg(Opcode::LoadLocal, tv as u32);
+                    }
+                }
+                self.emit_arg(Opcode::SetField, fid);
+            }
+            LvStep::Index(idx) => {
+                match bin {
+                    None => {
+                        self.lower_expr(idx);
+                        self.lower_expr(value);
+                    }
+                    Some(b) => {
+                        self.lower_expr(idx);
+                        let ti = self.declare_local("$ti");
+                        self.emit_arg(Opcode::StoreLocal, ti as u32);
+                        self.emit_arg(Opcode::LoadLocal, ti as u32);
+                        self.emit_op(Opcode::GetIndex);
+                        self.lower_expr(value);
+                        self.emit_op(b);
+                        // SetIndex 需 [容器, 索引, 值]：结果经临时重排
+                        let tv = self.declare_local("$tv");
+                        self.emit_arg(Opcode::StoreLocal, tv as u32);
+                        self.emit_arg(Opcode::LoadLocal, cs[last] as u32);
+                        self.emit_arg(Opcode::LoadLocal, ti as u32);
+                        self.emit_arg(Opcode::LoadLocal, tv as u32);
+                    }
+                }
+                self.emit_arg(Opcode::SetIndex, 0);
+            }
+        }
+        self.emit_arg(Opcode::StoreLocal, cv as u32);
+        // ④ 上升
+        let mut cur = cv;
+        for k in (0..steps.len() - 1).rev() {
+            self.emit_arg(Opcode::LoadLocal, cs[k] as u32);
+            match &steps[k] {
+                LvStep::Field(name) => {
+                    let fid = self.field_id(name);
+                    self.emit_arg(Opcode::LoadLocal, cur as u32);
+                    self.emit_arg(Opcode::SetField, fid);
+                }
+                LvStep::Index(_) => {
+                    if let Some(t) = its[k] {
+                        self.emit_arg(Opcode::LoadLocal, t as u32);
+                    }
+                    self.emit_arg(Opcode::LoadLocal, cur as u32);
+                    self.emit_arg(Opcode::SetIndex, 0);
+                }
+            }
+            let ck = cs[k];
+            self.emit_arg(Opcode::StoreLocal, ck as u32);
+            cur = ck;
+        }
+        // ⑤ 根槽位回写
+        self.emit_arg(Opcode::LoadLocal, cur as u32);
+        self.emit_arg(Opcode::StoreLocal, slot as u32);
+    }
+
     fn lower_lvalue_prefix(&mut self, e: &ast::Expr) {
         match &e.kind {
             ast::ExprKind::Ident(name) => {

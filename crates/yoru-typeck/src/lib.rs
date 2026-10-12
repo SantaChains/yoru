@@ -95,6 +95,14 @@ mod tests {
     // ===== 决策 26：int/float 严格 as =====
 
     #[test]
+    fn unwrap_on_narrowed_ident_allowed() {
+        // D-04（26 号登记）：nil 收窄（决策 40）后 `o!` 是恒等解包，
+        // 曾被 Y-T0004 误拦且诊断自相矛盾（帮助文本自己建议先做 nil 检查）。
+        let ds = errors("fn f(o: int?) -> int {\n    if o != nil {\n        let v = o!\n        return v + 1\n    }\n    return 0\n}\n");
+        assert!(ds.is_empty(), "收窄分支内 `!` 不应报错: {ds:#?}");
+    }
+
+    #[test]
     fn int_float_mixing_has_as_fixit() {
         let src = "fn f(a: int) -> float {\n    return a * 0.5\n}\n";
         let errs = errors(src);

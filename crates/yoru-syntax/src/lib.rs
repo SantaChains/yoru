@@ -75,6 +75,14 @@ mod tests {
     }
 
     #[test]
+    fn interp_trailing_bang_no_spin() {
+        // D-02（26 号登记）：插值子解析器切片无 Eof 哨兵，`${o!}` 以 `!` 结尾
+        // 曾使 postfix 循环死自旋直至 Y-S9502。
+        let src = "fn f() {\nlet o: int? = 1\nlet s = \"${o!}\"\n}\n";
+        assert!(parse_source(src).is_ok(), "{:?}", parse_source(src));
+    }
+
+    #[test]
     fn struct_update_and_match() {
         let src = concat!(
             "tag E = A | B(string)\n",

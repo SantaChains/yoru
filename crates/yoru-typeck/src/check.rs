@@ -1179,18 +1179,33 @@ impl<'e> Checker<'e> {
                 match t {
                     Ty::Opt(inner) => *inner,
                     other => {
-                        self.err(
-                            d(
-                                "Y-T0004",
-                                Severity::Error,
-                                format!("`!` 仅可解包 `T?`，得到 `{other}`"),
-                                e.span,
-                            )
-                            .with_suggestion(
-                                "先做 nil 检查获得智能收窄（决策 40），或用 `try` 传播",
-                            ),
+                        // D-04（26 号登记）：nil 收窄（决策 40）后的 `T` 上允许 `!`
+                        // 作恒等解包——值已非可空，`!` 不再要求重复 nil 检查
+                        //（诊断自相矛盾：帮助文本自己建议「先做 nil 检查」）。
+                        let narrowed = matches!(
+                            &operand.kind,
+                            ExprKind::Ident(name) if self
+                                .scopes
+                                .iter()
+                                .rev()
+                                .any(|s| s.facts.contains_key(name))
                         );
-                        Ty::Unit
+                        if narrowed {
+                            other
+                        } else {
+                            self.err(
+                                d(
+                                    "Y-T0004",
+                                    Severity::Error,
+                                    format!("`!` 仅可解包 `T?`，得到 `{other}`"),
+                                    e.span,
+                                )
+                                .with_suggestion(
+                                    "先做 nil 检查获得智能收窄（决策 40），或用 `try` 传播",
+                                ),
+                            );
+                            Ty::Unit
+                        }
                     }
                 }
             }

@@ -327,21 +327,15 @@ impl Vm {
 }
 
 /// Option 值构造（parse_* 内建）。
-pub fn mk_option(option_tag: Option<u32>, v: Option<Value>) -> Value {
-    match (option_tag, v) {
-        (Some(tag), Some(v)) => Value::Variant(Rc::new(crate::value::VariantVal {
-            tag,
-            variant: 1, // Some
-            payload: Some(Rc::new(v)),
-        })),
-        (Some(tag), None) => Value::Variant(Rc::new(crate::value::VariantVal {
-            tag,
-            variant: 0, // None
-            payload: None,
-        })),
-        // 模块无 Option tag（无 prelude 的手写模块）：降级为 Nil/值
-        (None, Some(v)) => v,
-        (None, None) => Value::Nil,
+/// 运行期表示统一（D-05/D-20，26 号登记）：`T?` = `Nil | T`——None 为 Nil，
+/// Some 为裸值。旧表示（Option 走 Variant 包装）使 nil 收窄（纯静态层）后的
+/// 值在运行期仍是 Variant：算术透传侥幸正确，但 display/Ok 构造/返回值泄漏
+/// `<variant N>`（D-20 Critical 静默错值）。spec 19 无 Some/None 模式匹配承诺，
+/// 表示统一无观测破坏面。
+pub fn mk_option(_option_tag: Option<u32>, v: Option<Value>) -> Value {
+    match v {
+        Some(v) => v,
+        None => Value::Nil,
     }
 }
 

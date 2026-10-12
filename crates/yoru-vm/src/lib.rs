@@ -970,18 +970,17 @@ impl Vm {
             }
             Opcode::Unwrap => {
                 let v = self.pop();
+                // 表示统一（D-05/D-20）：`T?` 运行期 = Nil | T。Variant 仅 Result/用户
+                // tag——解包取载荷；Nil 即 unwrap of nil（Y-R9015）；其余（Some 裸值）
+                // 恒等返回。
                 let payload = match &v {
                     Value::Variant(var) => var.payload.clone(),
                     Value::Nil => {
                         return Err(self.rerr("Y-R9015", "unwrap of nil"));
                     }
-                    other => {
-                        return Err(
-                            self.rerr("Y-R9015", format!("cannot unwrap {}", other.display()))
-                        );
-                    }
+                    _ => None,
                 };
-                self.push(payload.map(|p| (*p).clone()).unwrap_or(Value::Nil));
+                self.push(payload.map(|p| (*p).clone()).unwrap_or(v));
             }
             Opcode::IsErr => {
                 let v = self.pop();
@@ -1502,6 +1501,71 @@ mod tests {
     }
 
     // ---- 内建 ----
+
+    // ---- 26 号登记修复回归（D-06/07/08/09/17、D-05+20 表示统一）----
+
+    #[test]
+    fn field_assign_writes_back_slot() {
+        // D-06：p.x = 9 曾静默 no-op（栈上副本被 Pop 丢弃）
+        let v = run_src(
+            "struct P { x: int, y: int }\n\npub fn main() -> int {\n    let mut p = P { x: 1, y: 2 }\n    p.x = 9\n    return p.x * 10 + p.y\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(92));
+    }
+
+    #[test]
+    fn field_compound_assign_operand_order() {
+        // D-07：p.y += 3 曾操作数错位 Y-R9012
+        let v = run_src(
+            "struct P { x: int, y: int }\n\npub fn main() -> int {\n    let mut p = P { x: 1, y: 2 }\n    p.y += 3\n    return p.x * 10 + p.y\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(15));
+    }
+
+    #[test]
+    fn index_compound_assign_writes_back() {
+        // D-08：xs[1] += 5 曾两临时互换 Y-R9013
+        let v = run_src(
+            "pub fn main() -> int {\n    let mut xs = [9, 2, 3]\n    xs[1] += 5\n    return xs[0] * 100 + xs[1] * 10 + xs[2]\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(973));
+    }
+
+    #[test]
+    fn chained_index_assign_writes_back_root() {
+        // D-09：c[0][1] = 5 曾静默 no-op（内层 SetIndex 操作栈上副本）
+        let v = run_src(
+            "pub fn main() -> int {\n    let mut c = [[1, 2], [3, 4]]\n    c[0][1] = 5\n    return c[0][0] * 1000 + c[0][1] * 100 + c[1][0] * 10 + c[1][1]\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(1534));
+    }
+
+    #[test]
+    fn if_expression_yields_value() {
+        // D-17：if 表达式分支值曾静默 nil（块尾表达式未留栈）
+        let v = run_src(
+            "pub fn main() -> int {\n    let y = if 2 > 1 { 7 } else { 3 }\n    return y\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(7));
+    }
+
+    #[test]
+    fn option_runtime_repr_is_nil_or_value() {
+        // D-05：nil 收窄（决策 40）后直接算术——旧表示运行期仍是 Variant
+        // D-20：收窄值进 Ok 不再泄漏 <variant>（try 解包后可直接算术）
+        let v = run_src(
+            "tag E = Bad\n\nfn half(s: string) -> Result[int, E] {\n    let n = parse_int(s)\n    if n == nil { throw Bad }\n    return Ok(n)\n}\n\npub fn main() -> int {\n    let a = parse_int(\"21\")\n    if a == nil { return -1 }\n    let b = try half(\"21\")\n    return a + b\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(42));
+    }
+
+    // ---- 内建（续） ----
 
     #[test]
     fn builtins_and_print_output() {

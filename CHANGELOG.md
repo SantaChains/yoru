@@ -6,10 +6,12 @@
 ## [Unreleased]
 
 ### Fixed
+- **26 号登记修复批次（2026-10-12 对抗审核后落地，8 项）**：① struct 字段简单/复合赋值与链式索引赋值不再静默 no-op 或崩溃（D-06/07/08/09——lower 统一链式回写：根副本→逐层下降→内层变异→逐层上升→根槽位回写）；② if 表达式分支值不再静默 nil（D-17，块尾值语义落地）；③ 插值 `${o!}` 以 `!` 结尾不再死自旋至 Y-S9502（D-02，子解析器补 Eof 哨兵）；④ nil 收窄分支内 `o!` 不再被 Y-T0004 误拦（D-04，恒等解包）；⑤ `T?` 运行期表示统一为 `Nil | T`（D-05/D-20——收窄值进 Ok/返回值不再泄漏 `<variant N>`，spec 19 无 Some/None 匹配承诺故无观测破坏面）。回归测试 +8（VM×6/syntax×1/typeck×1），122 测试全绿；11 示例与 sort 基准全量回归通过。审核裁决与分歧（D-01 存疑/D-11 与决策 25 冲突/D-22 方向修正）见 26 号 §5。
 - 局部数组下标赋值不再触发整表拷贝（决策 80 `SetIndexLocal` 快路径）——插入排序基线实测从不可完成（堆限额 0.15s 触顶）到 0.7s 净执行。
 
 ### Added
 - 性能基线 v0（benchmarks/sort/，插入排序 × LuaJIT 对照，方法论与 harness 入库）。
+- **游戏数学示例套件（2026-10-12，examples/math/，11 篇全 `yoru run` 通过）**：线性代数（Vec2/Vec3/Mat2、鞋带面积/质心、三角函数 Horner 近似）、计算机图形学（透视投影管线、距离场软件光栅器）、游戏数学（clamp/lerp/smoothstep/LCG/状态机）、物理（显式 vs 辛 Euler 能量对比、定步长累加器）、计算几何（orient/线段相交/PIP）、语法总览（distinct/位运算/map/string/rune/Result-try/json/解析/切片）。两条宏观叙事主线（渲染管线 + 交互仿真）共享向量代数与高性能近似方法论；每篇自包含（CLI 无用户模块 import）。配套设计文档 **26-示例套件实测缺陷与规格落差登记.md**（D-01..D-26，26 条实证缺陷 + 根因 `文件:行` + 严重级 + workaround + 修复方向）。
 - 阶段 0-4 交付：解析（含防爆栈三重闸 Y-S9501/Y-S9502）、类型检查、LBC0 字节码、T1 VM（资源三限 + 中断 + 观测）、CLI `yoru check/run`、宿主自由函数桥（`register_host_fn`，宿主 panic 边界 Y-H9001）。
 - 工程卫生套装：双许可证、SECURITY、CONTRIBUTING、CI（含 MSRV 验证 job）。
 - stdlib 内建注册表统一收口（决策 77）：26 条内建签名由 `yoru_stdlib::BUILTINS` 单一事实源驱动，typeck/lower/VM 三面对账；`math.sqrt/floor/ceil`、`string.upper/to_runes`、`json.parse/stringify`、`parse_int/parse_float`、变参 `print`、`assert` 可选消息参数、`for i in range(n)` 迭代全部可用。
