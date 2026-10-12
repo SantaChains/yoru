@@ -6,6 +6,10 @@
 //!   `{` 不计入抑制深度：block 与 struct 体的字段/语句分隔依赖换行（19.2 struct_decl）。
 //! - **插值**：字符串内 `${expr}` 在词法期递归切分为 `StrPart::Interp(token 序列)`；
 //!   插值内禁止换行（19.1）。
+//! - **注释（决策 83 / 29 号 D2）**：`//`/`/* */` 产出 `Comment`、`///` 产出
+//!   `DocComment`——词法流一等保留（full-fidelity），文本经 span 切片复原。
+//!   换行延续判定对注释**穿透**（Go scanner 同款）：行尾注释不改变延续结构。
+//!   parser 经 `is_trivia` 预过滤，解析面零感知。
 //! - **源码卫生（决策 51）**：拒绝 Bidi 方向控制字符与零宽字符（含字符串/注释内部），
 //!   报错不警告；标识符 ASCII-only。
 //! - 错误恢复：非法字符跳过并记录诊断，不中断整个文件。
@@ -115,20 +119,30 @@ impl Lexer<'_> {
     }
 
     /// 换行产出判定：括号内抑制；行尾为延续记号时抑制。
+    ///
+    /// 判定对注释**穿透**（Go scanner 同款语义）：行尾注释不改变延续结构——
+    /// `a + // c\nb` 中注释遮住的 `+` 仍延续语句。未做穿透时行尾注释会把
+    /// 延续行截断为解析错误（F0 前既有潜伏缺陷，`///` 同族）。
     fn emit_newline(&mut self) {
         if self.depth > 0 {
             return; // 未闭合括号内语句延续（19.1）
         }
-        if self.out.last().is_none() {
-            return; // 文件头空行
-        }
-        if let Some(last) = self.out.last() {
-            if matches!(last.kind, TokenKind::Newline | TokenKind::LBrace) {
+        // 穿透尾部注释，看最后有效 token（trivia 对延续判定透明）
+        let effective = self
+            .out
+            .iter()
+            .rev()
+            .find(|t| !t.kind.is_trivia())
+            .map(|t| &t.kind);
+        match effective {
+            None => return, // 文件头注释/空行
+            Some(TokenKind::Newline | TokenKind::LBrace) => {
                 return; // 连续空行 / block 起始行
             }
-            if last.kind.continues_line() {
-                return; // 行尾延续（19.1 确定性规则）
+            Some(k) if k.continues_line() => {
+                return; // 行尾延续（19.1 确定性规则；含被注释遮住的记号）
             }
+            _ => {}
         }
         let sp = Span::new(self.pos - 1, self.pos);
         self.out.push(Token {
@@ -161,6 +175,9 @@ impl Lexer<'_> {
                 if doc {
                     let text = self.src[text_start..self.pos].trim_end().to_string();
                     self.push(TokenKind::DocComment(text), start);
+                } else {
+                    // 行注释整体进流（span 含 `//`），文本经切片复原（决策 83）
+                    self.push(TokenKind::Comment, start);
                 }
             }
             Some('*') => {
@@ -187,6 +204,9 @@ impl Lexer<'_> {
                             .with_suggestion("add closing `*/`"),
                     );
                 }
+                // 块注释整体进流（span 含 `/* */`；跨行时内部换行不产 Newline
+                // ——注释内不是语句边界，语义与 F0 前丢弃模型一致）
+                self.push(TokenKind::Comment, start);
             }
             _ => self.push(TokenKind::Slash, start),
         }

@@ -164,4 +164,80 @@ mod tests {
             Err(diags) => panic!("authoritative sample failed: {diags:#?}"),
         }
     }
+
+    // ===== 决策 83 / 29 号 D2：注释 trivia 一等化（F0） =====
+
+    #[test]
+    fn lexer_preserves_all_comment_forms() {
+        let src = "/// doc\n// line\n/* block */\nfn main() -> int {\n    return 0\n}\n";
+        let (tokens, diags) = tokenize(src);
+        assert!(diags.is_empty(), "{diags:#?}");
+        let doc = tokens
+            .iter()
+            .filter(|t| matches!(t.kind, TokenKind::DocComment(_)))
+            .count();
+        let comment = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Comment)
+            .count();
+        assert_eq!(doc, 1);
+        assert_eq!(comment, 2);
+        // span 覆盖定界符：块注释文本经切片复原
+        let blk = tokens.iter().any(|t| {
+            t.kind == TokenKind::Comment && &src[t.span.start..t.span.end] == "/* block */"
+        });
+        assert!(blk, "block comment span must cover delimiters");
+    }
+
+    #[test]
+    fn comments_are_invisible_to_parser() {
+        // 注释出现在一切合法位置：文件头/语句间/struct 字段间/块内/`}` 前
+        let src = "\
+// file header
+/// doc for main
+fn main() -> int {
+    // standalone line
+    let a = 1 // trailing on stmt
+    /* inline */ let b = 2
+    let s = S { /* mid */ x: a, // field comment
+        y: b }
+    return a /* ret */ + b
+}
+/* trailing tail */\n";
+        match parse_source(src) {
+            Ok(_) => {}
+            Err(diags) => panic!("comments must parse: {diags:#?}"),
+        }
+    }
+
+    #[test]
+    fn struct_decl_fields_with_comments() {
+        // struct_decl 字段换行分隔（19:41 无逗号）；struct_lit 用逗号（19:95）
+        let src = "\
+struct P {
+    x: int // first
+    y: float // second
+}
+fn main() -> int {
+    let p = P { x: 1, y: 2.0 }
+    return p.x
+}
+";
+        assert!(parse_source(src).is_ok(), "{:?}", parse_source(src).err());
+    }
+
+    #[test]
+    fn multiline_block_comment_is_single_token() {
+        let src = "/* a\nb\nc */\nfn main() -> int {\n    return 0\n}\n";
+        let (tokens, diags) = tokenize(src);
+        assert!(diags.is_empty(), "{diags:#?}");
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|t| t.kind == TokenKind::Comment)
+                .count(),
+            1
+        );
+        assert!(parse_source(src).is_ok());
+    }
 }

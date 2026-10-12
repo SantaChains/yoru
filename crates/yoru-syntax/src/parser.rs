@@ -5,6 +5,8 @@
 //! - **条件位受限文法**：if/while 条件与 match 判别式内禁 struct 字面量（19.4 歧义规则），
 //!   `if flag {` 中 `{` 恒为 block 起点。
 //! - 语句分隔 = Newline（lexer 产出的确定性终止符）；块内宽松跳过空行。
+//! - **注释预过滤（决策 83）**：`parse()` 入口剥除 trivia（Comment/DocComment），
+//!   解析循环对注释零感知；词法流保留全量注释供 fmt/LSP 经 span 消费。
 //! - 错误恢复：语句级失败跳到下一 Newline/`}`，不中断整个文件。
 //! - `or`/`and` 为**软关键字**：仅运算符位识别为 `||`/`&&`（19.2 EBNF 与 19.5 示例的
 //!   命名偏差之调和；正式修法待文档修订）。
@@ -40,8 +42,16 @@ const MAX_NEST_DEPTH: u32 = 500;
 const MAX_CHAIN_LEN: u32 = 1000;
 
 pub fn parse(tokens: &[Token]) -> Result<Program, Vec<Diagnostic>> {
+    // trivia 预过滤（rust-analyzer 分层微缩，决策 83）：parser 只见有效 token
+    // 与 Newline——注释不进任何解析循环，未来 parser 演进零注释负担。全保真
+    // 流由 lex() 提供，F1 fmt / LSP 直接消费（文本经 span 切片复原）。
+    let tokens: Vec<Token> = tokens
+        .iter()
+        .filter(|t| !t.kind.is_trivia())
+        .cloned()
+        .collect();
     let mut p = Parser {
-        tokens: tokens.to_vec(),
+        tokens,
         pos: 0,
         diagnostics: Vec::new(),
         no_struct: 0,
@@ -111,12 +121,9 @@ impl Parser {
         }
     }
 
-    /// 跳过空行与文档注释（声明间噪音）。
+    /// 跳过空行（注释已由 `parse()` 入口预过滤，此处只见 Newline）。
     fn skip_newlines(&mut self) {
-        while matches!(
-            self.peek().kind,
-            TokenKind::Newline | TokenKind::DocComment(_)
-        ) {
+        while matches!(self.peek().kind, TokenKind::Newline) {
             self.bump();
         }
     }

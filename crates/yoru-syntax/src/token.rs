@@ -99,11 +99,21 @@ pub enum TokenKind {
     Eof,
     /// 语句终止符（换行）；括号内/行尾延续时由 lexer 抑制。
     Newline,
-    /// `///` 文档注释内容（parser 当前忽略，doctest 提取属工具链 T5）。
+    /// `///` 文档注释内容（parser 预过滤忽略；doctest 提取属工具链 T5）。
     DocComment(String),
+    /// 注释（`//` 行注释与 `/* */` 块注释，span 覆盖含定界符全文）。
+    /// 词法流一等保留（rust-analyzer full-fidelity 同款），文本经 span 与原文
+    /// 切片复原——F1 fmt / LSP hover 直接消费；parser 经 `is_trivia` 预过滤，
+    /// 解析面零感知（决策 83 / 29 号 D2）。
+    Comment,
 }
 
 impl TokenKind {
+    /// trivia（词法流保留、解析不可见）：注释家族。`parse()` 入口统一预过滤。
+    pub fn is_trivia(&self) -> bool {
+        matches!(self, Self::Comment | Self::DocComment(_))
+    }
+
     /// 行尾延续判定（19.1 确定性规则）：这些记号结尾的行不终止语句。
     pub fn continues_line(&self) -> bool {
         matches!(
@@ -148,6 +158,7 @@ impl TokenKind {
             TokenKind::Ident(n) => format!("`{n}`"),
             TokenKind::Newline => "newline".into(),
             TokenKind::DocComment(_) => "doc comment".into(),
+            TokenKind::Comment => "comment".into(),
             other => format!("`{other:?}`"),
         }
     }

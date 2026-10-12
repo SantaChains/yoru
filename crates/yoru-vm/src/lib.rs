@@ -1514,6 +1514,55 @@ mod tests {
         );
     }
 
+    // ---- 决策 83 / 29 号 D2：注释穿透延续（F0） ----
+
+    #[test]
+    fn trailing_line_comment_keeps_expression_continuation() {
+        // `a + // c\n2`：注释遮住的 + 仍延续语句（Go scanner 穿透语义）
+        let v = run_src(
+            "pub fn main() -> int {\n    let a = 1\n    let b = a + // c\n    2\n    return b\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(3));
+    }
+
+    #[test]
+    fn trailing_doc_comment_keeps_expression_continuation() {
+        // `///` 同族（F0 前为既有潜伏缺陷：DocComment 不参与延续判定）
+        let v = run_src(
+            "pub fn main() -> int {\n    let a = 1\n    let b = a + /// c\n    2\n    return b\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(3));
+    }
+
+    #[test]
+    fn trailing_block_comment_keeps_expression_continuation() {
+        let v = run_src(
+            "pub fn main() -> int {\n    let a = 1\n    let b = a + /* c */\n    2\n    return b\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(3));
+    }
+
+    #[test]
+    fn inline_block_comment_in_expression() {
+        let v = run_src(
+            "pub fn main() -> int {\n    let b = 1 /* mid */ + 2\n    return b\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(3));
+    }
+
+    #[test]
+    fn comment_lines_around_statements() {
+        let v = run_src(
+            "// head\npub fn main() -> int {\n    // standalone\n    let a = 5 // tail\n    // between\n    return a\n}\n// tail of file\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(5));
+    }
+
     // ---- 内建 ----
 
     // ---- 27 号 A3：format_value tag 表反查（归并 D-21） ----
