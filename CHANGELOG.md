@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- **yoru-fuzz crate（2026-10-13，V 线 V0 crash-fuzz，30 号 §6.1）**：全链 panic-free 契约机械化验证——`lex → parse → typeck → lower → run(有限步)` 五阶段 catch_unwind，token 段级语法变异（字典注入/删除/复制/换行扰动，强度分布化）+ 深度守卫 + 确定性 RNG（`(seed, case_id)` 可重放）。run 有限步由 VM 资源三限承接（零 VM 扩展）。验收：10 万 case panic-free（62s）；smoke 800 case 常驻回归。libFuzzer 不支持 Windows，自研 harness 可薄包装为未来 cargo-fuzz target。
 - **`get` / `get_or` 内建（2026-10-13，28 号 R 线，27 号 §3.2 strict 取键）**：`get(m, k)` 命中返回值、缺键返回 None（`V?`），`get_or(m, k, d)` 缺键返回缺省值——缺键处理惯用法断层（get 侧）关闭。`map.get` 拼写与列表 map 函数撞名（决策 77 单一命名空间），按 keys/values 先例取裸名。类型闸实证：`int?` 赋 `int` 编译期拦截、键类型泛型冲突拦截。
 - **`yoru fmt` CLI（2026-10-13，F 线 F2）**：gofmt 风格三形态——默认 stdout（管道组合）、`-w` 原地写入、`--check` 校验（有差异 exit 1，CI 可直接挂）。语义不变性以最强形态验收：examples 11 篇格式化前后 `yoru run` 输出逐位一致（diff 执行结果而非 diff 文本）；解析错误文件诚实拒绝（fmt 只对合法文件负责）。
 - **yoru-fmt crate（2026-10-13，F 线 F1 核心，29 号裁决架构）**：token 空白重写器 + AST 区间指导布局 + span-blind 结构投影打印器 + `verify` 双断言（token 序列保真 + 结构投影保真 + 幂等）。注释/字符串/字面量经 span 逐字节保真；块体逐行缩进、struct_decl 字段与 match 臂逐行、行注释强制行尾、空行保留坍缩。三形态 spike + examples 11 篇全量双断言通过。CLI `yoru fmt` 属 F2。

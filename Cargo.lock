@@ -122,6 +122,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "yoru-fuzz"
+version = "0.1.0"
+dependencies = [
+ "yoru-bytecode",
+ "yoru-syntax",
+ "yoru-typeck",
+ "yoru-vm",
+]
+
+[[package]]
 name = "yoru-stdlib"
 version = "0.1.0"
 

@@ -9,6 +9,7 @@ members = [
     "crates/yoru-stdlib",
     "crates/yoru-cli",
     "crates/yoru-fmt",
+    "crates/yoru-fuzz",
 ]
 
 [workspace.package]
@@ -29,3 +30,11 @@ all = "warn"
 
 [profile.release]
 lto = "thin"
+
+# V0 crash-fuzz 专用（30 号 §6.1）：release 级性能 + 断言全开——
+# debug_assert/溢出检查触发即 panic 契约命中。与生产 release 构建刻意
+# 不同（libFuzzer FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION 同理）。
+[profile.fuzz]
+inherits = "release"
+overflow-checks = true
+debug-assertions = true

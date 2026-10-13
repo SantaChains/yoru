@@ -1,0 +1,19 @@
+[package]
+name = "yoru-fuzz"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+yoru-syntax = { path = "../yoru-syntax" }
+yoru-typeck = { path = "../yoru-typeck" }
+yoru-bytecode = { path = "../yoru-bytecode" }
+yoru-vm = { path = "../yoru-vm" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "yoru-fuzz"
+path = "src/main.rs"

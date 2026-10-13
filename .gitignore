@@ -16,3 +16,6 @@ Thumbs.db
 # Workspace-local agent memory / scratch
 .workbuddy/
 *.tmp
+
+# V0 fuzz artifacts（crash 归档不入库——崩例固化前先人工复核最小化）
+fuzz-artifacts/
