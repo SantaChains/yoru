@@ -462,7 +462,89 @@ impl Lowerer {
             .map(|l| l.upvals.iter().map(|(_, _, d)| d.clone()).collect())
             .unwrap_or_default();
         self.m.protos[proto_idx].upvalues = ups;
+        self.peephole_nil_pop(proto_idx);
         self.cur = None;
+    }
+
+    /// P0a 窥孔 pass：删除「Nil; Pop」相邻对（语句值补位 + 语句级丢弃 = 零功）。
+    ///
+    /// 发射期窥孔不安全（08_physics 实证）：块尾值 Nil 可能同时是跳转目标
+    /// （如 if 无 else 臂补位 = JmpIfNot 的 else 落点），Pop 也可能是回跳
+    /// 目标（循环体尾）。此处单 pass 后处理：原始坐标收集跳转表与待删对，
+    /// 落在跳转目标上的对保守保留；删除后按「target 与 j_pc 各自前移量」
+    /// 重算全部跳转偏移。P0a① 直方图实证（sort 负载）：Nil 与 Pop 各 7.7%。
+    fn peephole_nil_pop(&mut self, pi: usize) {
+        let is_jump = |op: Opcode| {
+            matches!(
+                op,
+                Opcode::Jmp
+                    | Opcode::JmpIf
+                    | Opcode::JmpIfNot
+                    | Opcode::JmpIfNotLt
+                    | Opcode::JmpIfNotLe
+                    | Opcode::JmpIfNotGt
+                    | Opcode::JmpIfNotGe
+            )
+        };
+        let code = &self.m.protos[pi].code;
+        // 原始坐标跳转表：(指令 pc, 有符号偏移)
+        let jumps: Vec<(usize, i32)> = code
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| is_jump(i.op))
+            .map(|(pc, i)| (pc, i.sarg()))
+            .collect();
+        let targets: std::collections::HashSet<usize> = jumps
+            .iter()
+            .map(|(j, s)| (*j as i64 + *s as i64) as usize)
+            .collect();
+        // 待删对（Nil 的 pc，原始坐标；从后往前找，对之间不重叠）
+        let mut deletions: Vec<usize> = Vec::new();
+        let mut pc = code.len();
+        while pc >= 2 {
+            pc -= 1;
+            if matches!(code[pc].op, Opcode::Nil)
+                && matches!(code[pc + 1].op, Opcode::Pop)
+                && !targets.contains(&pc)
+                && !targets.contains(&(pc + 1))
+            {
+                deletions.push(pc);
+            }
+        }
+        if deletions.is_empty() {
+            return;
+        }
+        // 跳过集合：每对的 Nil 与 Pop 两个 pc
+        let skip: std::collections::HashSet<usize> =
+            deletions.iter().flat_map(|&d| [d, d + 1]).collect();
+        // 前移量：位置 p 删除后新坐标 = p - 2 × (删除点 > p 的个数)
+        let shift = |p: usize| -> usize { p - 2 * deletions.iter().filter(|&&d| d < p).count() };
+        // 重建 code：跳过删除对；跳转偏移按 target 与 j_pc 各自前移量重算
+        let old_code = std::mem::take(&mut self.m.protos[pi].code);
+        let mut new_code = Vec::with_capacity(old_code.len() - 2 * deletions.len());
+        for (jpc, instr) in old_code.iter().enumerate() {
+            if skip.contains(&jpc) {
+                continue;
+            }
+            let mut instr = *instr;
+            if is_jump(instr.op) {
+                let t = jpc as i64 + instr.sarg() as i64;
+                let new_t = t - 2 * deletions.iter().filter(|&&d| (d as i64) < t).count() as i64;
+                let new_j = shift(jpc) as i64;
+                let s = (new_t - new_j) as i32;
+                instr.arg = (s as u32) & 0x00FF_FFFF;
+            }
+            new_code.push(instr);
+        }
+        self.m.protos[pi].code = new_code;
+        let old_tabs = std::mem::take(self.line_tabs.get_mut(&pi).expect("line tab"));
+        let new_tabs: Vec<u32> = old_tabs
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !skip.contains(i))
+            .map(|(_, t)| t)
+            .collect();
+        self.line_tabs.insert(pi, new_tabs);
     }
 
     // ---- 指令发射原语 ----
@@ -486,6 +568,59 @@ impl Lowerer {
     }
 
     fn emit_op(&mut self, op: Opcode) -> usize {
+        // 窥孔融合（P0a③「Cmp+JumpIf」超指令）：`Xx; JmpIfNot t` → `JmpIfNotXx t`。
+        // 比较语义逐位一致（同一 cmp_values 路径），patch 机制只改 arg 与
+        // opcode 无关——目标回填对融合指令照常生效。安全性：比较指令紧跟
+        // 其操作数发射，永不为跳转目标，删除不错位。
+        if op == Opcode::JmpIfNot {
+            let st = self.cur.as_ref().expect("emit outside fn");
+            let pi = st.proto_idx;
+            let fused = match self.m.protos[pi].code.last().map(|i| i.op) {
+                Some(Opcode::Lt) => Some(Opcode::JmpIfNotLt),
+                Some(Opcode::Le) => Some(Opcode::JmpIfNotLe),
+                Some(Opcode::Gt) => Some(Opcode::JmpIfNotGt),
+                Some(Opcode::Ge) => Some(Opcode::JmpIfNotGe),
+                _ => None,
+            };
+            if let Some(fused_op) = fused {
+                self.m.protos[pi].code.pop();
+                self.line_tabs.get_mut(&pi).expect("line tab").pop();
+                return self.emit(Instr::new(fused_op));
+            }
+        }
+        // 窥孔融合（决策 80 族对称）：`LoadLocal b; LoadLocal i; GetIndex`
+        // → `GetIndexLL(b<<16|i)`——省 2 条 LoadLocal 与操作数栈往返。
+        if op == Opcode::GetIndex {
+            let st = self.cur.as_ref().expect("emit outside fn");
+            let pi = st.proto_idx;
+            let code = &self.m.protos[pi].code;
+            let pair = if code.len() >= 2 {
+                match (&code[code.len() - 2], &code[code.len() - 1]) {
+                    (
+                        Instr {
+                            op: Opcode::LoadLocal,
+                            arg: b,
+                        },
+                        Instr {
+                            op: Opcode::LoadLocal,
+                            arg: i,
+                        },
+                    ) => Some((*b, *i)),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some((b, i)) = pair {
+                let arg = (b << 16) | (i & 0xFFFF);
+                self.m.protos[pi].code.pop();
+                self.m.protos[pi].code.pop();
+                let tabs = self.line_tabs.get_mut(&pi).expect("line tab");
+                tabs.pop();
+                tabs.pop();
+                return self.emit_arg(Opcode::GetIndexLL, arg);
+            }
+        }
         self.emit(Instr::new(op))
     }
 

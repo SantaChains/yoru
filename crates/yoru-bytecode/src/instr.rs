@@ -87,6 +87,10 @@ pub enum Opcode {
     /// 双重引用，使决策 13 的 `refcount==1` 互斥判定真正可观测——
     /// 否则局部数组每次下标赋值都触发 O(n) 整表拷贝。
     SetIndexLocal = 0x66,
+    /// 局部变量下标读：`locals[base][locals[idx]]`，arg = base_slot << 16 | idx_slot。
+    /// 对称推广 SetIndexLocal（决策 80 族，P0a① 直方图驱动）：`xs[j]` 双局部
+    /// 模式省 2 条 LoadLocal 与操作数栈往返（sort 负载 GetIndex 7.7% 近全为此形态）。
+    GetIndexLL = 0x67,
     // 0x70-0x7F 阶段 2 扩展（见模块注释）
     ToString = 0x70,
     ForPrep = 0x71,
@@ -100,7 +104,19 @@ pub enum Opcode {
     TagNew = 0x79,
     NewRange = 0x7A,
     Slice = 0x7B,
+    // ---- 融合条件跳转（P0a③「Cmp+JumpIf」超指令，25 号 §A 直方图驱动）----
+    // 语义 = `Xx; JmpIfNot target` 融合：弹 (b, a)，`!(a cmp b)` 成立则跳转。
+    // 比较语义与独立指令逐位一致（含 Y-R9007/Y-R9011 错误面）；lower 窥孔
+    // 在 JmpIfNot 发射点检测前置比较指令自动生成（sort 负载 -9.1% 指令）。
+    JmpIfNotLt = 0x7C,
+    JmpIfNotLe = 0x7D,
+    JmpIfNotGt = 0x7E,
+    JmpIfNotGe = 0x7F,
 }
+
+/// opcode 编码空间大小（0x00-0x67 连续 + 0x70-0x7B 扩展段）——
+/// VM 直方图表驱动用（P0a① profile 释疑，25 号 §A）。
+pub const OPCODE_COUNT: usize = 0x80;
 
 impl Opcode {
     pub fn from_byte(b: u8) -> Option<Opcode> {
@@ -156,6 +172,7 @@ impl Opcode {
             0x64 => Opcode::CallHost,
             0x65 => Opcode::Raise,
             0x66 => Opcode::SetIndexLocal,
+            0x67 => Opcode::GetIndexLL,
             0x70 => Opcode::ToString,
             0x71 => Opcode::ForPrep,
             0x72 => Opcode::ForNext,
@@ -168,6 +185,10 @@ impl Opcode {
             0x79 => Opcode::TagNew,
             0x7A => Opcode::NewRange,
             0x7B => Opcode::Slice,
+            0x7C => Opcode::JmpIfNotLt,
+            0x7D => Opcode::JmpIfNotLe,
+            0x7E => Opcode::JmpIfNotGt,
+            0x7F => Opcode::JmpIfNotGe,
             _ => return None,
         })
     }
@@ -285,7 +306,9 @@ mod tests {
 
     #[test]
     fn reserved_opcode_rejected() {
-        assert!(Instr::decode(0x67, 0).is_err()); // 0x67 未分配（0x66 = SetIndexLocal）
+        // 0x67 已分配 GetIndexLL（决策 80 族对称，P0a③）；0x68-0x6F 仍为空洞
+        assert!(Instr::decode(0x67, 0).is_ok());
+        assert!(Instr::decode(0x68, 0).is_err());
         assert!(Instr::decode(0xC0, 0).is_err());
     }
 

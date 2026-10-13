@@ -242,6 +242,10 @@ fn effect(op: Opcode, arg: u32, m: &Lbc0Module) -> Option<(usize, usize)> {
         Opcode::SetIndex => (3, 1),
         // 弹 (值, 索引) 变异局部槽 —— 无压出（SetIndexLocal 快路径，T2b）
         Opcode::SetIndexLocal => (2, 0),
+        // 双局部槽下标读 —— 无弹只压（GetIndexLL，决策 80 族对称推广）
+        Opcode::GetIndexLL => (0, 1),
+        // 融合条件跳转：弹 (b, a) 双操作数（P0a③「Cmp+JumpIf」）
+        Opcode::JmpIfNotLt | Opcode::JmpIfNotLe | Opcode::JmpIfNotGt | Opcode::JmpIfNotGe => (2, 0),
         Opcode::SetField => (2, 1),
         Opcode::Call | Opcode::CallMethod | Opcode::TailCall | Opcode::CallHost => {
             (arg as usize + 1, 1) // 弹 callee+args 压结果
@@ -321,6 +325,24 @@ fn analyze(code: &[Instr], m: &Lbc0Module) -> Result<(Vec<Option<usize>>, usize)
                     return Err(VerifyError::StackUnderflow { pc });
                 }
                 let after = depth - 1; // 条件已被弹出：两条后继路径都在弹栈后深度
+                work.push((target as usize, after));
+                max_depth = max_depth.max(after);
+                work.push((pc + 1, after));
+                continue;
+            }
+            Opcode::JmpIfNotLt | Opcode::JmpIfNotLe | Opcode::JmpIfNotGt | Opcode::JmpIfNotGe => {
+                let target = pc as i64 + instr.sarg() as i64;
+                if target < 0 || target as usize >= n {
+                    return Err(VerifyError::JumpOutOfRange {
+                        pc,
+                        target: instr.sarg(),
+                        code_len: n,
+                    });
+                }
+                if depth < 2 {
+                    return Err(VerifyError::StackUnderflow { pc });
+                }
+                let after = depth - 2; // 双比较操作数已弹出
                 work.push((target as usize, after));
                 max_depth = max_depth.max(after);
                 work.push((pc + 1, after));

@@ -31,6 +31,7 @@ pub use error::{LimitKind, RuntimeError, VmError};
 pub use value::{ClosureObj, Cursor, HostFn, MapBox, StructObj, Value, VariantVal};
 
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
@@ -177,6 +178,9 @@ pub struct Vm {
     output: Vec<u8>,
     interrupt: Option<InterruptFn>,
     deadline: Option<Instant>,
+    /// opcode 直方图（P0a① profile 释疑）：None = 零开销（热循环单分支）。
+    /// `enable_op_histogram` 显式开启，run 结束经 `op_histogram()` 读取。
+    op_histogram: Option<Box<[u64]>>,
 }
 
 enum Step {
@@ -208,7 +212,18 @@ impl Vm {
             output: Vec::new(),
             interrupt: None,
             deadline: None,
+            op_histogram: None,
         }
+    }
+
+    /// 开启 opcode 直方图统计（profiling 专用；默认关闭零开销）。
+    pub fn enable_op_histogram(&mut self) {
+        self.op_histogram = Some(vec![0u64; yoru_bytecode::OPCODE_COUNT].into_boxed_slice());
+    }
+
+    /// 取走直方图（索引 = opcode 编码，值 = 执行次数）。未开启返回 None。
+    pub fn take_op_histogram(&mut self) -> Option<Box<[u64]>> {
+        self.op_histogram.take()
     }
 
     pub fn set_limits(&mut self, limits: Limits) {
@@ -498,6 +513,21 @@ impl Vm {
 
     // ---- 指令步进 ----
 
+    /// 值排序比较（Lt/Le/Gt/Ge 与融合条件跳转共用；语义单一事实源）。
+    fn cmp_values(&mut self, a: &Value, b: &Value) -> Result<std::cmp::Ordering, VmError> {
+        match (a, b) {
+            (Value::Int(x), Value::Int(y)) => Ok(x.cmp(y)),
+            (Value::Str(x), Value::Str(y)) => Ok(x.cmp(y)),
+            (Value::Float(x), Value::Float(y)) => x
+                .partial_cmp(y)
+                .ok_or_else(|| self.rerr("Y-R9011", "float comparison with NaN is unordered")),
+            _ => Err(self.rerr(
+                "Y-R9007",
+                format!("cannot order {} and {}", a.display(), b.display()),
+            )),
+        }
+    }
+
     fn step(&mut self) -> Result<Step, VmError> {
         // 预算与节流（决策 71）
         self.stats.instructions += 1;
@@ -524,6 +554,11 @@ impl Vm {
         let proto = self.cur_proto();
         let instr: Instr = self.module_ref().protos[proto].code[pc];
         self.frames.last_mut().expect("frame").pc += 1;
+
+        // P0a①：直方图统计点——None 时是单个可预测分支，热路径零实质开销
+        if let Some(h) = self.op_histogram.as_mut() {
+            h[instr.op as usize] += 1;
+        }
 
         match instr.op {
             // ---- 常量/构造 ----
@@ -788,25 +823,10 @@ impl Vm {
             }
             Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
                 let (a, b) = self.pop2()?;
-                let ord = match (&a, &b) {
-                    (Value::Int(x), Value::Int(y)) => x.cmp(y),
-                    (Value::Str(x), Value::Str(y)) => x.cmp(y),
-                    (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).ok_or_else(|| {
-                        self.rerr("Y-R9011", "float comparison with NaN is unordered")
-                    })?,
-                    _ => {
-                        return Err(self.rerr(
-                            "Y-R9007",
-                            format!("cannot order {} and {}", a.display(), b.display()),
-                        ));
-                    }
-                };
-                use std::cmp::Ordering::*;
-                let ok = match instr.op {
-                    Opcode::Lt => ord == Less,
-                    Opcode::Le => ord != Greater,
-                    Opcode::Gt => ord == Greater,
-                    _ => ord != Less,
+                let ok = match self.cmp_values(&a, &b)? {
+                    Ordering::Less => matches!(instr.op, Opcode::Lt | Opcode::Le),
+                    Ordering::Equal => matches!(instr.op, Opcode::Le | Opcode::Ge),
+                    Ordering::Greater => matches!(instr.op, Opcode::Gt | Opcode::Ge),
                 };
                 self.push(Value::Bool(ok));
             }
@@ -821,6 +841,24 @@ impl Vm {
                     return Err(self.rerr("Y-R9008", "branch condition must be bool"));
                 };
                 if b == (instr.op == Opcode::JmpIf) {
+                    self.jump(instr);
+                }
+            }
+            // 融合条件跳转（P0a③）：`Xx; JmpIfNot t` 一条完成——比较语义经
+            // cmp_values 与独立比较指令逐位一致（含 Y-R9007/Y-R9011 错误面）。
+            Opcode::JmpIfNotLt | Opcode::JmpIfNotLe | Opcode::JmpIfNotGt | Opcode::JmpIfNotGe => {
+                let b = self.pop();
+                let a = self.pop();
+                let holds = match self.cmp_values(&a, &b)? {
+                    Ordering::Less => matches!(instr.op, Opcode::JmpIfNotLt | Opcode::JmpIfNotLe),
+                    Ordering::Equal => {
+                        matches!(instr.op, Opcode::JmpIfNotLe | Opcode::JmpIfNotGe)
+                    }
+                    Ordering::Greater => {
+                        matches!(instr.op, Opcode::JmpIfNotGt | Opcode::JmpIfNotGe)
+                    }
+                };
+                if !holds {
                     self.jump(instr);
                 }
             }
@@ -878,6 +916,46 @@ impl Vm {
             Opcode::GetIndex => {
                 let idx = self.pop();
                 let base = self.pop();
+                let v = match (&base, &idx) {
+                    (Value::List(l), Value::Int(i)) => {
+                        let l = l.borrow();
+                        let i = *i;
+                        if i < 0 || i as usize >= l.len() {
+                            return Err(self.rerr(
+                                "Y-R9013",
+                                format!("list index {i} outside 0..{}", l.len()),
+                            ));
+                        }
+                        l[i as usize].clone()
+                    }
+                    (Value::Map(m), k) => m
+                        .borrow()
+                        .iter()
+                        .find(|(k2, _)| k2.deep_eq(k))
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or(Value::Nil), // 决策 55：Map 缺键取 nil
+                    (Value::Str(_), Value::Int(_)) => {
+                        return Err(self.rerr(
+                            "Y-R9014",
+                            "string indexing forbidden (decision 46); iterate or slice",
+                        ));
+                    }
+                    _ => {
+                        return Err(self.rerr(
+                            "Y-R9013",
+                            format!("cannot index {} with {}", base.display(), idx.display()),
+                        ));
+                    }
+                };
+                self.push(v);
+            }
+            // 融合下标读（决策 80 族对称，P0a③）：`locals[base][locals[idx]]`
+            // 一条完成——语义与 GetIndex 逐位一致（边界/Map 缺键/Str 拒绝同面）。
+            Opcode::GetIndexLL => {
+                let idx = self.frames.last().expect("frame").locals[(instr.arg & 0xFFFF) as usize]
+                    .clone();
+                let base =
+                    self.frames.last().expect("frame").locals[(instr.arg >> 16) as usize].clone();
                 let v = match (&base, &idx) {
                     (Value::List(l), Value::Int(i)) => {
                         let l = l.borrow();
@@ -2262,5 +2340,96 @@ mod registry_tests {
             Value::Str(Rc::from("{\"a\":1}"))
         );
         assert!(vm.dispatch_builtin("stringify", &[Value::Int(1)]).is_err());
+    }
+}
+
+// ── P0a③ 融合指令回归（25 号 §A 直方图驱动批次） ──
+
+#[cfg(test)]
+mod fused_tests {
+    use super::*;
+    use yoru_syntax::parse_source;
+
+    fn compile(src: &str) -> Instance {
+        let program = parse_source(src).expect("parse");
+        let m = yoru_bytecode::lower(&program).expect("lower");
+        yoru_bytecode::verify_module(&m).expect("verify");
+        Instance::new(m)
+    }
+
+    fn run_capture(src: &str) -> Result<String, VmError> {
+        let inst = compile(src);
+        let mut vm = Vm::new();
+        let r = vm.run(inst, None, vec![])?;
+        let _ = r;
+        Ok(String::from_utf8_lossy(&vm.take_output()).into_owned())
+    }
+
+    /// 融合条件跳转 + GetIndexLL 的语义锚：while + if-else + 序贯赋值
+    /// （08_physics 回归的最小形态——Nil;Pop 窥孔需保守跳过跳转目标上的对）。
+    #[test]
+    fn fused_jump_and_index_semantics() {
+        let src = r#"
+fn main() -> int {
+    let mut i = 0
+    while i < 3 {
+        if true {
+            i = i + 1
+        } else {
+            i = i + 2
+        }
+        i = i + 1
+    }
+    print(i)
+    return 0
+}
+"#;
+        assert_eq!(
+            run_capture(src).expect("run"),
+            "4
+"
+        );
+    }
+
+    /// if 无 else 臂补位 Nil 是跳转目标——窥孔必须保守保留（删除错位实证）。
+    #[test]
+    fn peephole_preserves_jump_target_nil() {
+        let src = r#"
+fn main() -> int {
+    let mut n = 0
+    while n < 3 {
+        if n == 1 {
+            print("one")
+        }
+        n = n + 1
+    }
+    print(n)
+    return 0
+}
+"#;
+        assert_eq!(
+            run_capture(src).expect("run"),
+            "one
+3
+"
+        );
+    }
+
+    /// GetIndexLL 融合路径的下标边界语义与独立 GetIndex 一致（Y-R9013）。
+    #[test]
+    fn getindex_ll_bounds_match_getindex() {
+        let src = r#"
+fn main() -> int {
+    let xs = [1, 2, 3]
+    let mut i = 5
+    print(xs[i])
+    return 0
+}
+"#;
+        let err = run_capture(src).unwrap_err();
+        let VmError::Runtime(e) = err else {
+            panic!("runtime error expected");
+        };
+        assert_eq!(e.code, "Y-R9013");
     }
 }

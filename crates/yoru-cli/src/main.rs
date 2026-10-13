@@ -57,9 +57,11 @@ fn main() -> ExitCode {
             let mut path = None;
             let mut host_demo = false;
             let mut entry: Option<String> = None;
+            let mut show_stats = false;
             for a in &args[2..] {
                 match a.as_str() {
                     "--host=demo" | "--host" => host_demo = true,
+                    "--stats" => show_stats = true,
                     s if s.starts_with("--entry=") => {
                         entry = Some(s["--entry=".len()..].to_string())
                     }
@@ -71,9 +73,9 @@ fn main() -> ExitCode {
                 }
             }
             match path {
-                Some(p) => run(&p, host_demo, entry.as_deref()),
+                Some(p) => run(&p, host_demo, entry.as_deref(), show_stats),
                 None => {
-                    eprintln!("usage: yoru run [--host=demo] [--entry=F] <file.yoru>");
+                    eprintln!("usage: yoru run [--host=demo] [--entry=F] [--stats] <file.yoru>");
                     ExitCode::from(2)
                 }
             }
@@ -244,7 +246,7 @@ fn build(path: &str, host_demo: bool, out: Option<&str>) -> ExitCode {
     }
 }
 
-fn run(path: &str, host_demo: bool, entry: Option<&str>) -> ExitCode {
+fn run(path: &str, host_demo: bool, entry: Option<&str>, show_stats: bool) -> ExitCode {
     let module = match compile_to_module(path, host_demo) {
         Ok(m) => m,
         Err(code) => return code,
@@ -254,6 +256,9 @@ fn run(path: &str, host_demo: bool, entry: Option<&str>) -> ExitCode {
         yoru_vm::demo::install_demo_host(&mut inst);
     }
     let mut vm = yoru_vm::Vm::new();
+    if show_stats {
+        vm.enable_op_histogram();
+    }
     // edition 2024 析构时序：run 的返回值临时量先绑定再 match——显式固定
     // 「结果临时量先于 vm/inst 析构」的次序（Value 无副作用 Drop，绑定使
     // 次序与 edition 无关，消除 tail-expr-drop-order 跨 edition 语义差）。
@@ -267,6 +272,9 @@ fn run(path: &str, host_demo: bool, entry: Option<&str>) -> ExitCode {
             let display = vm.format_value(&v);
             if display != "nil" {
                 println!("= {display}");
+            }
+            if show_stats {
+                print_op_histogram(&mut vm);
             }
             ExitCode::SUCCESS
         }
@@ -390,5 +398,36 @@ fn doctest(paths: &[std::path::PathBuf]) -> ExitCode {
             eprintln!("error: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// P0a① opcode 直方图报告（--stats）：top 指令占比——超指令选型（25 号
+/// §A）以真实负载分布为据，不凭感觉。名称反查用 Opcode Debug 分解。
+fn print_op_histogram(vm: &mut yoru_vm::Vm) {
+    let Some(hist) = vm.take_op_histogram() else {
+        return;
+    };
+    let total: u64 = hist.iter().sum();
+    if total == 0 {
+        return;
+    }
+    let mut ranked: Vec<(u8, u64)> = hist
+        .iter()
+        .enumerate()
+        .filter(|&(_, &n)| n > 0)
+        .map(|(i, &n)| (i as u8, n))
+        .collect();
+    ranked.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+    println!("-- opcode histogram (total {total}) --");
+    for (op, n) in ranked.iter().take(12) {
+        let name = yoru_bytecode::Opcode::from_byte(*op)
+            .map(|o| format!("{o:?}"))
+            .unwrap_or_else(|| format!("0x{op:02X}"));
+        println!(
+            "  {:>12}  {:>9}  {:>5.1}%",
+            name,
+            n,
+            *n as f64 / total as f64 * 100.0
+        );
     }
 }
