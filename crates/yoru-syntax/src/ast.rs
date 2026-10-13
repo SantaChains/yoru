@@ -104,7 +104,7 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct FnDecl {
     pub name: String,
-    /// 泛型形参（19.2 `fn f[T](...)`；D-13 实例化管线的声明侧载体）
+    /// 泛型形参（19.2 `fn f<T>(...)`；D-13 实例化管线的声明侧载体）
     pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
@@ -326,12 +326,21 @@ pub enum Pattern {
     Nil,
     /// 标识符（绑定或 nil/常量名）
     Bind(String),
-    /// `Variant(p)` 单载荷绑定（多载荷变体载荷为 struct，绑定为整体）
+    /// `Variant(p)` 单载荷绑定（多载荷变体载荷为 struct，绑定为整体）；
+    /// `Variant(_)` 显式丢弃载荷（决策 86）——`Some(Ignore)` 与省略括号的 `None`
+    /// 语义不同：前者对带载荷变体合法，后者仅限无载荷变体。
     Variant {
         name: String,
-        payload: Option<String>,
+        payload: Option<Payload>,
     },
     Wildcard,
+}
+
+/// 变体载荷模式（决策 86）：命名绑定或 `_` 显式丢弃。
+#[derive(Debug, Clone)]
+pub enum Payload {
+    Bind(String),
+    Ignore,
 }
 
 #[derive(Debug, Clone)]

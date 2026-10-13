@@ -20,7 +20,7 @@ type UserId = distinct int
 tag Err = NotFound | BadInput(string)
 
 // try 传播链：parse_int 的 T? 在调用点解包，负数路径 throw（运行期 raised）
-fn double(s: string) -> Result[int, Err] {
+fn double(s: string) -> Result<int, Err> {
     let v = parse_int(s)!
     if v < 0 {
         throw BadInput(s)
@@ -28,14 +28,14 @@ fn double(s: string) -> Result[int, Err] {
     return Ok(v + v)
 }
 
-fn quadruple(s: string) -> Result[int, Err] {
+fn quadruple(s: string) -> Result<int, Err> {
     let d = try double(s)
     return Ok(d + d)
 }
 
 // Result 演示收在 fn 内（try 须在 Result 返回函数内；main 返回 int 保持
 // CLI 尾部输出干净）
-fn result_demo() -> Result[int, Err] {
+fn result_demo() -> Result<int, Err> {
     let q = try quadruple("21")
     print("quadruple(21) = ${q}")
     let jv = j.parse("{\"hp\": 100, \"name\": \"yoru\"}")

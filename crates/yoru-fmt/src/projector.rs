@@ -465,10 +465,14 @@ fn pat(p: &ast::Pattern, s: &mut String) {
         ast::Pattern::Bind(n) => s.push_str(n),
         ast::Pattern::Variant { name, payload } => {
             s.push_str(name);
-            if let Some(pl) = payload {
-                s.push('(');
-                s.push_str(pl);
-                s.push(')');
+            match payload {
+                Some(ast::Payload::Bind(pl)) => {
+                    s.push('(');
+                    s.push_str(pl);
+                    s.push(')');
+                }
+                Some(ast::Payload::Ignore) => s.push_str("(_)"),
+                None => {}
             }
         }
         ast::Pattern::Wildcard => s.push('_'),

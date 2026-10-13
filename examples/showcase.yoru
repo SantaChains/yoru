@@ -42,18 +42,18 @@ tag E = NotFound | BadInput(string)
 tag Op = Plus | Minus
 
 // ---- 泛型 fn（D-13：call-site 实例化，单份 proto 零代码膨胀）----
-fn first[T](xs: [T]) -> T {
+fn first<T>(xs: [T]) -> T {
     return xs[0]
 }
 
-fn apply2[T, U](x: T, f: (T) -> U) -> U {
+fn apply2<T, U>(x: T, f: (T) -> U) -> U {
     return f(x)
 }
 
 // ---- Result / try / match（决策 54）----
 // 注意：失败路径用 `return Err(...)`。`throw` 在运行期是穿透一切的
 // Raise（try 无捕获机制，见 26 号登记），二者不等价。
-fn find(xs: [int], want: int) -> Result[int, E] {
+fn find(xs: [int], want: int) -> Result<int, E> {
     for i in 0..len(xs) {
         if xs[i] == want {
             return Ok(i)
@@ -70,8 +70,8 @@ fn eval(op: Op) -> int {
 }
 
 // Result-match 的类型上下文来自 return 位（Y-T0018）：臂构造器 Ok/Err
-// 由此获得 Result[int, E] 类型；let 初始化位的臂会退化为 unit。
-fn probe(want: int) -> Result[int, E] {
+// 由此获得 Result<int, E> 类型；let 初始化位的臂会退化为 unit。
+fn probe(want: int) -> Result<int, E> {
     let a = try find([3, 1, 4, 1, 5], 4)               // try 双传播（决策 54）：恒 Ok → 2
     return match find([3, 1, 4, 1, 5], want) {         // 失败路径交给 match，不走 try
         Ok(v) -> Ok(a * 10 + v)
@@ -80,7 +80,7 @@ fn probe(want: int) -> Result[int, E] {
     }
 }
 
-pub fn main() -> Result[string, E] {
+pub fn main() -> Result<string, E> {
     // ═══ 1. 算术 · floor 语义（决策 44）· 插值唯一拼串 ═══
     let a = 7
     let b = 2

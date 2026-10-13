@@ -1762,7 +1762,7 @@ mod tests {
     #[test]
     fn match_and_try_propagation() {
         let v = run_src(
-            "tag E = NotFound | BadInput(string)\n\nfn find(xs: [int], want: int) -> Result[int, E] {\n    for i in 0..len(xs) {\n        if xs[i] == want {\n            return Ok(i)\n        }\n    }\n    return Err(NotFound)\n}\n\npub fn main() -> Result<int, E> {\n    let a = try find([3, 1, 4, 1, 5], 4)\n    return match find([3, 1, 4, 1, 5], 9) {\n        Ok(v) -> Ok(v)\n        Err(NotFound) -> Ok(a * 10 + 1)\n        Err(other) -> Err(other)\n    }\n}\n",
+            "tag E = NotFound | BadInput(string)\n\nfn find(xs: [int], want: int) -> Result<int, E> {\n    for i in 0..len(xs) {\n        if xs[i] == want {\n            return Ok(i)\n        }\n    }\n    return Err(NotFound)\n}\n\npub fn main() -> Result<int, E> {\n    let a = try find([3, 1, 4, 1, 5], 4)\n    return match find([3, 1, 4, 1, 5], 9) {\n        Ok(v) -> Ok(v)\n        Err(NotFound) -> Ok(a * 10 + 1)\n        Err(other) -> Err(other)\n    }\n}\n",
         )
         .expect("run");
         // try 对 Ok 解包 → a = 2；find(...,9) = Err(NotFound) → Ok(21)
@@ -1926,7 +1926,7 @@ mod tests {
     #[test]
     fn raised_error_formats_with_tag_name() {
         // D-21：throw 传播到顶层的错误值此前显示 `<variant 0>`，无错误身份。
-        let src = "tag MyErr = NotFound\nfn f() -> Result[int, MyErr] {\n    throw NotFound\n}\npub fn main() -> int {\n    return 0\n}\n";
+        let src = "tag MyErr = NotFound\nfn f() -> Result<int, MyErr> {\n    throw NotFound\n}\npub fn main() -> int {\n    return 0\n}\n";
         let mut vm = Vm::new();
         // 直接调 f 触发 raise：用 run 内 entry 覆盖（entry 参数指定函数名）。
         let err = vm.run(compile(src), Some("f"), vec![]).expect_err("raise");
@@ -1993,7 +1993,7 @@ mod tests {
         // D-05：nil 收窄（决策 40）后直接算术——旧表示运行期仍是 Variant
         // D-20：收窄值进 Ok 不再泄漏 <variant>（try 解包后可直接算术）
         let v = run_src(
-            "tag E = Bad\n\nfn half(s: string) -> Result[int, E] {\n    let n = parse_int(s)\n    if n == nil { throw Bad }\n    return Ok(n)\n}\n\npub fn main() -> int {\n    let a = parse_int(\"21\")\n    if a == nil { return -1 }\n    let b = try half(\"21\")\n    return a + b\n}\n",
+            "tag E = Bad\n\nfn half(s: string) -> Result<int, E> {\n    let n = parse_int(s)\n    if n == nil { throw Bad }\n    return Ok(n)\n}\n\npub fn main() -> int {\n    let a = parse_int(\"21\")\n    if a == nil { return -1 }\n    let b = try half(\"21\")\n    return a + b\n}\n",
         )
         .expect("run");
         assert_eq!(v, Value::Int(42));
@@ -2120,7 +2120,7 @@ mod tests {
 
     #[test]
     fn debug_and_strip_semantically_identical() {
-        let src = "tag E = Bad(string)\nfn harm(n: int) -> Result[int, E] {\n    if n < 0 { return Err(Bad(\"neg\")) }\n    return Ok(n * n)\n}\npub fn main() -> string {\n    let a = try harm(9)\n    let b = try harm(0 - 3)\n    return \"${a}/${b}\"\n}\n";
+        let src = "tag E = Bad(string)\nfn harm(n: int) -> Result<int, E> {\n    if n < 0 { return Err(Bad(\"neg\")) }\n    return Ok(n * n)\n}\npub fn main() -> string {\n    let a = try harm(9)\n    let b = try harm(0 - 3)\n    return \"${a}/${b}\"\n}\n";
         let full = compile(src);
         let main_idx = debuginfo::DebugInfo::from_module(full.module())
             .expect("debug")

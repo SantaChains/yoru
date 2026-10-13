@@ -275,16 +275,12 @@ impl Parser {
         }
     }
 
-    /// 类型参数：`<T, U: Ord>`（19.2 文法）或 `[T]`（19.5 示例括号式，兼容）。
+    /// 类型参数：`<T, U: Ord>` 唯一形式（决策 85——`[T]` 括号式已撤销）。
     fn parse_type_params(&mut self) -> Vec<String> {
         let mut params = Vec::new();
-        let bracket = if self.eat(&TokenKind::Lt) {
-            false
-        } else if self.eat(&TokenKind::LBracket) {
-            true
-        } else {
+        if !self.eat(&TokenKind::Lt) {
             return params;
-        };
+        }
         loop {
             if let Ok(n) = self.expect_ident("type parameter") {
                 params.push(n);
@@ -298,11 +294,7 @@ impl Parser {
             }
             break;
         }
-        if bracket {
-            let _ = self.expect(&TokenKind::RBracket, "`]`");
-        } else {
-            let _ = self.expect(&TokenKind::Gt, "`>`");
-        }
+        let _ = self.expect(&TokenKind::Gt, "`>`");
         params
     }
 
@@ -583,11 +575,10 @@ impl Parser {
         } else {
             None
         };
-        let body = if self.eat(&TokenKind::Assign) {
-            FnBody::Expr(self.parse_expr())
-        } else {
-            FnBody::Block(self.parse_block()?)
-        };
+        // 命名 fn 体单形式：block + 显式 return（决策 84——消灭
+        // 「fn f() = x 合法而 fn f() { x } 非法」的文法自相矛盾；
+        // `= expr` 表达式体仅属 lambda（表达式位））。
+        let body = FnBody::Block(self.parse_block()?);
         Some(FnDecl {
             name,
             type_params,
@@ -662,11 +653,10 @@ impl Parser {
                 }
                 _ => {
                     self.bump();
-                    // 类型实参双形式：文法 v2 的 `Name<T>` 与 19.5 示例的 `Name[T]`（兼容）
+                    // 类型实参唯一形式 `Name<T>`（决策 85——19.9a 双形式兼容已撤销，
+                    // 消除 lexer/parser 反馈型消歧：`[` 紧跟 identifier 后曾按泛型解析）
                     let args = if self.at(&TokenKind::Lt) {
                         self.parse_type_args()
-                    } else if self.at(&TokenKind::LBracket) {
-                        self.parse_bracket_type_args()
                     } else {
                         Vec::new()
                     };
@@ -713,23 +703,7 @@ impl Parser {
         }
     }
 
-    /// 类型实参 `[T, U]` 形式（19.5 示例用 `Tree[int]`/`Result[int, Err]`，兼容 19.2 的 `<>`）。
-    fn parse_bracket_type_args(&mut self) -> Vec<Type> {
-        let mut args = Vec::new();
-        self.bump(); // [
-        if !self.eat(&TokenKind::RBracket) {
-            loop {
-                args.push(self.parse_type());
-                if !self.eat(&TokenKind::Comma) {
-                    break;
-                }
-            }
-            self.expect(&TokenKind::RBracket, "`]`").ok();
-        }
-        args
-    }
-
-    /// 类型实参 `<T, U>`（named 后缀）。
+    /// 类型实参 `<T, U>`（named 后缀，唯一形式——决策 85）。
     fn parse_type_args(&mut self) -> Vec<Type> {
         let mut args = Vec::new();
         if !self.at(&TokenKind::Lt) {
@@ -1734,7 +1708,15 @@ impl Parser {
                 if n == "_" {
                     Pattern::Wildcard
                 } else if self.eat(&TokenKind::LParen) {
-                    let payload = self.expect_ident("variant payload binding").ok();
+                    // 载荷模式：命名绑定或 `_` 显式丢弃（决策 86；`_` 为 Ident("_")）
+                    let payload = if self.peek().kind == TokenKind::Ident("_".into()) {
+                        self.bump();
+                        Some(Payload::Ignore)
+                    } else {
+                        self.expect_ident("variant payload binding")
+                            .ok()
+                            .map(Payload::Bind)
+                    };
                     self.expect(&TokenKind::RParen, "`)`").ok();
                     Pattern::Variant { name: n, payload }
                 } else {

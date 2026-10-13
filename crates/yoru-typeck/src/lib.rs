@@ -96,15 +96,15 @@ mod tests {
 
     #[test]
     fn generic_fn_instantiation() {
-        // D-13：`fn first[T](xs: [T]) -> T` 声明期 T 不得报未知类型；
+        // D-13：`fn first<T>(xs: [T]) -> T` 声明期 T 不得报未知类型；
         // 调用位按实参实例化（apply_sig 既有管线）。
         let ok = errors(
-            "fn first[T](xs: [T]) -> T {\n    return xs[0]\n}\nfn main() -> int {\n    return first([1, 2, 3])\n}\n",
+            "fn first<T>(xs: [T]) -> T {\n    return xs[0]\n}\nfn main() -> int {\n    return first([1, 2, 3])\n}\n",
         );
         assert!(ok.is_empty(), "泛型 fn 声明与调用不应报错: {ok:#?}");
         // 跨类型实例化：同一泛型 fn 的 string 实例。
         let ok2 = errors(
-            "fn first[T](xs: [T]) -> T {\n    return xs[0]\n}\nfn main() -> string {\n    return first([\"a\"])\n}\n",
+            "fn first<T>(xs: [T]) -> T {\n    return xs[0]\n}\nfn main() -> string {\n    return first([\"a\"])\n}\n",
         );
         assert!(ok2.is_empty(), "泛型 fn 第二实例不应报错: {ok2:#?}");
     }
@@ -115,12 +115,12 @@ mod tests {
         // contains_generic 跳过）；body 内函数值调用 f(x): U 为泛型域合法
         // 自由变量（apply_sig Y-T0018 兜底域内放行）。
         let ok = errors(
-            "fn apply2[T, U](x: T, f: (T) -> U) -> U {\n    return f(x)\n}\nfn main() -> string {\n    return apply2(5, fn(n: int) = \"s\")\n}\n",
+            "fn apply2<T, U>(x: T, f: (T) -> U) -> U {\n    return f(x)\n}\nfn main() -> string {\n    return apply2(5, fn(n: int) = \"s\")\n}\n",
         );
         assert!(ok.is_empty(), "双变量泛型 + lambda 推断不应报错: {ok:#?}");
         // 泛型域内自由变量流动：body 内 f(x): U 传播到 return。
         let ok2 = errors(
-            "fn apply1[T, U](f: (T) -> U, x: T) -> U {\n    let y = f(x)\n    return y\n}\n",
+            "fn apply1<T, U>(f: (T) -> U, x: T) -> U {\n    let y = f(x)\n    return y\n}\n",
         );
         assert!(ok2.is_empty(), "泛型域内 f(x): U 不应报错: {ok2:#?}");
     }
@@ -130,7 +130,7 @@ mod tests {
         // U 只出现在返回位、调用位实参无法确定 → Y-T0018（apply_sig 既有
         // 诊断）；body 内 return x 另有 T≠U mismatch，此处断言调用位面。
         let bad = errors(
-            "fn mk[T, U](x: T) -> U {\n    return x\n}\nfn main() -> int {\n    let _ = mk(5)\n    return 0\n}\n",
+            "fn mk<T, U>(x: T) -> U {\n    return x\n}\nfn main() -> int {\n    let _ = mk(5)\n    return 0\n}\n",
         );
         assert!(
             bad.iter().any(|d| d.code.as_deref() == Some("Y-T0018")),
@@ -144,14 +144,46 @@ mod tests {
         // 运行时却支持——VM 测试不走 typeck 所以未暴露；showcase.yoru 红证）。
         // 修后：Ok 绑定 ok 位、Err 绑定 err 位（载荷递归），穷尽性 Ok+Err 齐备。
         let ok = errors(
-            "tag E = NotFound | BadInput(string)\nfn find(xs: [int], want: int) -> Result[int, E] {\n    for i in 0..len(xs) {\n        if xs[i] == want {\n            return Ok(i)\n        }\n    }\n    return Err(NotFound)\n}\nfn probe(want: int) -> Result[int, E] {\n    let a = try find([3, 1, 4, 1, 5], want)\n    return match find([3, 1, 4, 1, 5], want) {\n        Ok(v) -> Ok(a * 10 + v)\n        Err(NotFound) -> Ok(0 - 1)\n        Err(other) -> Err(other)\n    }\n}\n",
+            "tag E = NotFound | BadInput(string)\nfn find(xs: [int], want: int) -> Result<int, E> {\n    for i in 0..len(xs) {\n        if xs[i] == want {\n            return Ok(i)\n        }\n    }\n    return Err(NotFound)\n}\nfn probe(want: int) -> Result<int, E> {\n    let a = try find([3, 1, 4, 1, 5], want)\n    return match find([3, 1, 4, 1, 5], want) {\n        Ok(v) -> Ok(a * 10 + v)\n        Err(NotFound) -> Ok(0 - 1)\n        Err(other) -> Err(other)\n    }\n}\n",
         );
         assert!(ok.is_empty(), "Result-match Ok/Err 模式不应报错: {ok:#?}");
         // 穷尽性：缺 Err 臂必须 Y-T0015
         let bad = errors(
-            "tag E = Boom\nfn f(r: Result[int, E]) -> int {\n    return match r {\n        Ok(v) -> v\n    }\n}\n",
+            "tag E = Boom\nfn f(r: Result<int, E>) -> int {\n    return match r {\n        Ok(v) -> v\n    }\n}\n",
         );
         assert!(bad.iter().any(|d| d.code.as_deref() == Some("Y-T0015")));
+    }
+
+    // ===== 决策 84/86：fn 体单形式 + 变体载荷 `_` 丢弃 =====
+
+    #[test]
+    fn named_fn_expr_body_rejected_lambda_expr_body_ok() {
+        // 决策 84：命名 fn 体单形式（block + 显式 return）——`fn f() = x`
+        // 与「fn f() { x } 非法」的自相矛盾移除；`= expr` 表达式体仅属 lambda。
+        let (tokens, _) = yoru_syntax::tokenize("fn f() = 1\n");
+        assert!(
+            parser::parse(&tokens).is_err(),
+            "命名 fn 表达式体必须被拒绝"
+        );
+        // lambda `= expr` 体不受影响
+        let ok = errors(
+            "fn twice(f: (int) -> int, x: int) -> int {\n    return f(f(x))\n}\nfn main() -> int {\n    return twice(fn(n) = n * 2, 3)\n}\n",
+        );
+        assert!(ok.is_empty(), "lambda 表达式体不应报错: {ok:#?}");
+    }
+
+    #[test]
+    fn variant_payload_ignore_wildcard() {
+        // 决策 86：`Node(_)` 显式丢弃载荷——带载荷变体不再强制绑定命名
+        let ok = errors(
+            "tag T = Leaf | Node(int)\nfn size(t: T) -> int {\n    return match t {\n        Leaf -> 0\n        Node(_) -> 1\n    }\n}\nfn main() -> int {\n    return size(Node(5))\n}\n",
+        );
+        assert!(ok.is_empty(), "Node(_) 载荷丢弃不应报错: {ok:#?}");
+        // 无载荷变体不能加括号（含 `(_)`）
+        let bad = errors(
+            "tag T = Leaf | Node(int)\nfn size(t: T) -> int {\n    return match t {\n        Leaf(_) -> 0\n        Node(_) -> 1\n    }\n}\n",
+        );
+        assert!(bad.iter().any(|d| d.code.as_deref() == Some("Y-T0002")));
     }
 
     // ===== 决策 26：int/float 严格 as =====
@@ -307,7 +339,7 @@ mod tests {
     fn discarded_result_warns() {
         let src = concat!(
             "tag E = Boom\n",
-            "fn g() -> Result[int, E] {\n    return Ok(1)\n}\n",
+            "fn g() -> Result<int, E> {\n    return Ok(1)\n}\n",
             "fn f() {\n    g()\n}\n",
         );
         let ws = warnings(src);
@@ -321,7 +353,7 @@ mod tests {
     fn explicit_let_underscore_discard_is_silent() {
         let src = concat!(
             "tag E = Boom\n",
-            "fn g() -> Result[int, E] {\n    return Ok(1)\n}\n",
+            "fn g() -> Result<int, E> {\n    return Ok(1)\n}\n",
             "fn f() {\n    let _ = g()\n}\n",
         );
         assert!(

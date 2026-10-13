@@ -1277,11 +1277,12 @@ impl Lowerer {
                     self.emit_arg(Opcode::LoadLocal, t as u32);
                     self.emit_arg(Opcode::Payload, ci);
                     match payload {
-                        Some(p) => {
+                        Some(ast::Payload::Bind(p)) => {
                             let slot = self.declare_local(p);
                             self.emit_arg(Opcode::StoreLocal, slot as u32);
                         }
-                        None => {
+                        // `_` 显式丢弃与无括号（无载荷变体）同路径：Pop
+                        Some(ast::Payload::Ignore) | None => {
                             self.emit_op(Opcode::Pop); // PAYLOAD 对无载荷变体压 nil
                         }
                     }

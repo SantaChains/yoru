@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use yoru_syntax::ast::{self, BinOp, Expr, ExprKind, Pattern, StmtKind, UnOp};
+use yoru_syntax::ast::{self, BinOp, Expr, ExprKind, Pattern, Payload, StmtKind, UnOp};
 use yoru_syntax::{Diagnostic, Severity, Span};
 
 use crate::env::{BUILTIN_PROTOCOLS, DeclTable, Env, Resolver, TypeKind};
@@ -1556,8 +1556,8 @@ impl<'e> Checker<'e> {
                             (**e).clone()
                         };
                         return match payload {
-                            Some(p) => vec![(p.clone(), want)],
-                            None => vec![], // 载荷被忽略（lower Pop）
+                            Some(Payload::Bind(p)) => vec![(p.clone(), want)],
+                            Some(Payload::Ignore) | None => vec![], // 载荷被忽略（lower Pop）
                         };
                     }
                 }
@@ -1574,38 +1574,42 @@ impl<'e> Checker<'e> {
                     }
                 };
                 match self.decls.variants.get(name).cloned() {
-                    Some((tag, pty)) if tag == owner => match (pty, payload) {
-                        (Some(pt), Some(binder)) => {
-                            // 载荷类型以 tag 实参代换（Tree[int] → Node2[int]）
-                            let subst = self.tag_subst(&owner, &tag_args);
-                            let r = Resolver {
-                                decls: &self.decls,
-                                env: self.env,
-                                subst,
-                            };
-                            let t = r.resolve(&pt).unwrap_or(Ty::Unit);
-                            vec![(binder.clone(), t)]
-                        }
-                        (None, None) => vec![],
-                        (Some(_), None) => {
-                            self.err(d(
+                    Some((tag, pty)) if tag == owner => {
+                        match (pty, payload) {
+                            (Some(pt), Some(Payload::Bind(binder))) => {
+                                // 载荷类型以 tag 实参代换（Tree[int] → Node2[int]）
+                                let subst = self.tag_subst(&owner, &tag_args);
+                                let r = Resolver {
+                                    decls: &self.decls,
+                                    env: self.env,
+                                    subst,
+                                };
+                                let t = r.resolve(&pt).unwrap_or(Ty::Unit);
+                                vec![(binder.clone(), t)]
+                            }
+                            // `Node(_)`：带载荷变体的显式丢弃（决策 86）
+                            (Some(_), Some(Payload::Ignore)) => vec![],
+                            (None, None) => vec![],
+                            (Some(_), None) => {
+                                self.err(d(
                                 "Y-T0002",
                                 Severity::Error,
-                                format!("变体 `{name}` 带载荷，需 `{name}(p)` 绑定"),
+                                format!("变体 `{name}` 带载荷，需 `{name}(p)` 绑定或 `{name}(_)` 丢弃"),
                                 span,
                             ));
-                            vec![]
+                                vec![]
+                            }
+                            (None, Some(_)) => {
+                                self.err(d(
+                                    "Y-T0002",
+                                    Severity::Error,
+                                    format!("变体 `{name}` 无载荷，不能绑定"),
+                                    span,
+                                ));
+                                vec![]
+                            }
                         }
-                        (None, Some(_)) => {
-                            self.err(d(
-                                "Y-T0002",
-                                Severity::Error,
-                                format!("变体 `{name}` 无载荷，不能绑定"),
-                                span,
-                            ));
-                            vec![]
-                        }
-                    },
+                    }
                     _ => {
                         self.err(d(
                             "Y-T0002",

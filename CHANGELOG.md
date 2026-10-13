@@ -6,14 +6,18 @@
 ## [Unreleased]
 
 ### Added
+- **变体载荷 `_` 显式丢弃（2026-10-13，决策 86）**：`match t { Node(_) -> ... }` 对带载荷变体合法——此前强制命名绑定（未用绑定触发未用警告）。`Err(NotFound)` 字面变体、`Err(e)` 绑定、`Node(_)` 丢弃三种载荷形态齐备；无载荷变体加括号（含 `(_)`）维持 Y-T0002 拒绝。
+- **Result-match 正式入 spec（2026-10-13，D-27 + 决策 86）**：19 号 19.5 的「match 不能直接匹配 Result」更正记录作废——`Ok(v)`/`Err(e)` 构造器模式 + 穷尽性（D-27 落地）回写语法权威。
 - **语言特色全景单文件示范 `examples/showcase.yoru`（2026-10-13）**：12 节覆盖常量折叠 / distinct / 泛型 call-site 实例化 / 闭包快照与嵌套祖父捕获 / 管道与切片 / map KV 迭代 / struct COW 与 spread 更新 / 槽位消歧 / 控制流 / Option 收窄 / Result-match 全形态 / rune——单文件 e2e 回归网（`showcase_e2e_full_feature_file`：typeck→lower→verify→demo host 运行，12 节输出逐行钉死），LBC0 build/run 往返输出一致。
 - **Result-match Ok/Err 模式（2026-10-13，26 号 D-27）**：`match r { Ok(v) -> ... Err(e) -> ... }` 此前被 typeck 整体拒绝（Y-T0002「变体模式要求 tag 类型」）——运行时早已支持而 typeck 缺位，VM 测试不含 typeck 故未暴露（showcase 红证）。`check_pattern` 增 `Ty::Res` 的 Ok/Err 模式臂（payload 为绑定名，与 lower 语义一致），`check_match` 穷尽性认 Ok+Err 齐备。注：Result-match 实际限 return 表达式位（构造器类型上下文来自函数返回类型，Y-T0018）。
-- **泛型函数与数据类型（2026-10-13，30 号序 8 泛型批次）**：`fn f[T, U](xs: [T]) -> U` 泛型函数 call-site 实例化——声明期 `T` 解析为类型变量，调用位按实参 unify 绑定（`first([1,2])` → int、`first(["a"])` → string，同函数多实例化零代码膨胀：统一 Value 表示下单份字节码承载全部实例）；lambda 实参参与推断（`apply2(7, fn(n) = "s")` → U=string）；返回类型含未绑定泛型 → 结构化 Y-T0018。泛型 struct/tag 变体构造按载荷反推类型实参（`Boxed(P2<int> { .. })` → `Box2<int>`）+ 泛型变体 match 模式匹配全链工作。类型位方括号兼容形式 `Name[T]` 可用；表达式位类型实参用规范形式 `Name<int>`（`[T]` 与索引文法冲突，裁决限类型位）。
+- **泛型函数与数据类型（2026-10-13，30 号序 8 泛型批次）**：`fn f[T, U](xs: [T]) -> U` 泛型函数 call-site 实例化——声明期 `T` 解析为类型变量，调用位按实参 unify 绑定（`first([1,2])` → int、`first(["a"])` → string，同函数多实例化零代码膨胀：统一 Value 表示下单份字节码承载全部实例）；lambda 实参参与推断（`apply2(7, fn(n) = "s")` → U=string）；返回类型含未绑定泛型 → 结构化 Y-T0018。泛型 struct/tag 变体构造按载荷反推类型实参（`Boxed(P2<int> { .. })` → `Box2<int>`）+ 泛型变体 match 模式匹配全链工作。（登记后注：类型位 `Name[T]` 兼容形式已由决策 85 撤销，`<T>` 唯一——见 Changed。）
 - **Map 迭代 KV entry（2026-10-13，决策 82 第二步）**：`for kv in m` 产出内建 `KV { key, value }` struct（插入序快照）——`kv.key`/`kv.value` 字段访问与 `${}` 插值全链工作；纯键通道迁移为 `for k in keys(m)`（keys 内建既有）。`KV` 为保留类型名（声明拒绝 Y-T0005）。**破坏性**：LBC0 major 2.0——旧 1.x 产物的键语义与本版不符，重新编译即可。
 - **VM 取指热路径合并（2026-10-13，P1 首步，25 号 §A）**：step() 单次帧尾访问取 (proto, pc) 并推进 + `Frame.proto` 直存（省每条一次 Rc 解引用）。受控 A/B ~1%（严格减法保留）；同批证据裁决：Quickening 算术特化在当前负载形态下建模收益 ~1% 不抵架构成本，**诚实延后**（触发条件：算术密集负载 Add/Sub/Mul/Div 直方图占比 >25%）。
 - **struct 字段访问静态槽位表 + 懒名字（2026-10-13，P0b，25 号 §A）**：字段序由 struct 声明表静态决定，run 装载期预计算 `(struct_id, fid) → slot` 槽位表——GetField/SetField 快路径 O(log k) 二分 + fid 复核（防宿主构造值自对齐漂移），未命中回退线性扫描（语义逐位保留）。成功路径不再为错误信息做 String 堆分配（懒构造）。struct 密集负载（新增 benchmarks/structs）median **1441.1 → 936.7ms（-35%）**，checksum 逐位一致；sort 基准零字段操作（直方图实证），基线持平。
 
 ### Changed
+- **命名 fn 体单形式（2026-10-13，决策 84）**：`fn f() = expr` 表达式体被移除——命名 fn 体一律 block + 显式 `return`（决策 50 的贯彻到底，消灭「`= expr` 合法而块尾值非法」的文法自相矛盾）；lambda 的 `fn(x) = expr` 表达式体不受影响（管道工效保留）。
+- **泛型 `<T>` 唯一（2026-10-13，决策 85，破坏性）**：泛型实参与类型参数只认尖括号 `Name<T>` / `fn f<T>`——19.9a 双形式兼容撤销（「`[` 紧跟 identifier 后按泛型解析」是 lexer/parser 反馈型消歧，违反最小隐藏行为哲学）。使用 `Name[T]` 的源码需一次性迁移（官方示例与文档已全部迁移）。
 - **CLI flag 输入域收紧（2026-10-13，质量审计）**：`--heap-mb` 数值域改 u64——负值原会流入限额逻辑产生「一切分配静默失败」的荒谬状态，现解析层即拒绝（exit 2）；巨值饱和转换（实际无限，语义保真）。`--entry=`/`--out=` 空值解析层拒绝（空名永远非法、空路径只会产出不可读写错误）——fail-fast 优于运行时结构化错误。`.yoruc` 构建产物入 `.gitignore`（可由 build 再生，不入库）。
 - **同型不可算术诊断更正**：`xs + xs`（List 等同型不支持算术）原报「期望 [T] 得到 [T]」自相矛盾，现报「类型不支持算术运算」（Y-T0022）。
 
