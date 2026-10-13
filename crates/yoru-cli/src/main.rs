@@ -108,7 +108,7 @@ fn main() -> ExitCode {
                 Some(p) => run(&p, host_demo, entry.as_deref(), show_stats, &bounds),
                 None => {
                     eprintln!(
-                        "usage: yoru run [--host=demo] [--entry=F] [--stats] [--max-instructions=N] [--heap-mb=N] [--deadline-ms=N] <file.yoru>"
+                        "usage: yoru run [--host=demo] [--entry=F] [--stats] [--max-instructions=N] [--heap-mb=N] [--deadline-ms=N] <file.yoru|.yoruc>"
                     );
                     ExitCode::from(2)
                 }
@@ -178,7 +178,7 @@ fn main() -> ExitCode {
 /// help 成功请求 exit 0、未知命令 exit 2（clig.dev）。
 fn print_help() {
     eprintln!(
-        "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] [--stats] [--max-instructions=N] [--heap-mb=N] [--deadline-ms=N] <file.yoru>\n                                                      compile + execute via T1 VM (resource bounds)\n  yoru fmt [--check|-l | -w] <file.yoru>...           format source (stdout | in-place | check)\n  yoru doctest <file.md|.yoru|dir>...                 extract and verify embedded code blocks\n  yoru -h | --help                                    show this help\n  yoru --version"
+        "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] [--stats] [--max-instructions=N] [--heap-mb=N] [--deadline-ms=N] <file.yoru|.yoruc>\n                                                      compile or direct-load LBC0, execute via T1 VM\n  yoru fmt [--check|-l | -w] <file.yoru>...           format source (stdout | in-place | check)\n  yoru doctest <file.md|.yoru|dir>...                 extract and verify embedded code blocks\n  yoru -h | --help                                    show this help\n  yoru --version"
     );
 }
 
@@ -262,6 +262,13 @@ fn fmt(files: &[String], write_in_place: bool, check_only: bool) -> ExitCode {
 }
 
 fn check(path: &str, host_demo: bool) -> ExitCode {
+    // .yoruc 守卫与 compile_to_module 同口径：字节码误入给诚实指引。
+    if path.ends_with(".yoruc") {
+        eprintln!(
+            "error: {path} is compiled bytecode; use `yoru run` to execute it (check/build operate on source)"
+        );
+        return ExitCode::FAILURE;
+    }
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -328,9 +335,20 @@ fn run(
     show_stats: bool,
     bounds: &RunBounds,
 ) -> ExitCode {
-    let module = match compile_to_module(path, host_demo) {
-        Ok(m) => m,
-        Err(code) => return code,
+    // LBC0 直载（P0a④）：`.yoruc` 跳过前端全链（parse/typeck/lower），
+    // 反序列化 + 结构验证后直入 VM——启动减半（25 号 §A ④）。
+    // validate-before-use（决策 9）不豁免自产字节码：CRC 由 deserialize
+    // 把关，结构合法性仍必须过 verify_module。
+    let module = if path.ends_with(".yoruc") {
+        match load_bytecode_module(path) {
+            Ok(m) => m,
+            Err(code) => return code,
+        }
+    } else {
+        match compile_to_module(path, host_demo) {
+            Ok(m) => m,
+            Err(code) => return code,
+        }
     };
     let mut inst = yoru_vm::Instance::new(module);
     if host_demo {
@@ -384,8 +402,43 @@ fn run(
     }
 }
 
+/// LBC0 直载（P0a④）：读文件 → deserialize（magic/version/CRC32 完整性
+/// 把关）→ verify_module（结构合法性 validate-before-use）。IO/格式错误 =
+/// 执行错误 exit 1（与编译失败同域——产物坏是数据问题，不是用法问题）。
+fn load_bytecode_module(path: &str) -> Result<yoru_bytecode::Lbc0Module, ExitCode> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: cannot read {path}: {e}");
+            return Err(ExitCode::FAILURE);
+        }
+    };
+    let module = match yoru_bytecode::Lbc0Module::deserialize(&bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {path}: invalid LBC0 module: {e}");
+            return Err(ExitCode::FAILURE);
+        }
+    };
+    if let Err(errs) = yoru_bytecode::verify_module(&module) {
+        for e in &errs {
+            eprintln!("internal: structural verification failed: {e}");
+        }
+        eprintln!("this is a Yoru bug (Y-I): please report with a minimal repro");
+        return Err(ExitCode::FAILURE);
+    }
+    Ok(module)
+}
+
 /// 源码 → typeck → lowering → 结构验证。任何失败打印诊断并返回对应退出码。
 fn compile_to_module(path: &str, host_demo: bool) -> Result<yoru_bytecode::Lbc0Module, ExitCode> {
+    // check/build 面向源码：字节码产物误入给出诚实指引，而非 UTF-8 解码噪音。
+    if path.ends_with(".yoruc") {
+        eprintln!(
+            "error: {path} is compiled bytecode; use `yoru run` to execute it (check/build operate on source)"
+        );
+        return Err(ExitCode::FAILURE);
+    }
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
