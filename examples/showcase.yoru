@@ -1,0 +1,191 @@
+// ============================================================================
+// showcase.yoru — Yoru 语言特色全景单文件示范
+//
+// 运行：yoru run examples/showcase.yoru --host=demo
+// 校验：yoru check examples/showcase.yoru --host=demo
+// 字节码闭环（LBC0）：
+//   yoru build examples/showcase.yoru -o showcase.yoruc
+//   yoru run showcase.yoruc
+// ============================================================================
+
+// ---- 导入（决策 43：import 必用；模块内建经限定名访问）----
+import string from "std"                     // 决策 46：字符串工具
+import math from "std"                       // sqrt / floor / ceil
+
+// ---- 常量（决策 38：hex / 下划线分隔；编译期折叠）----
+const MAX_ROUNDS: int = 0xFF
+const BIG: int = 1_000_000
+
+// ---- 结构体 + pub 对外可见 ----
+pub struct Vec3 {
+    x: float
+    y: float
+    z: float
+}
+
+// ---- 协议显式 impl（决策 21）----
+impl Add for Vec3 {
+    fn add(a: Vec3, b: Vec3) -> Vec3 {
+        return Vec3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }
+    }
+}
+
+// ---- distinct 新类型（决策 23：与基类型不互换，仅 as 往返）----
+type Meters = distinct int
+
+// ---- 同名字段异布局（P0b 静态槽位表按 struct_id 消歧）----
+struct P { x: int, y: int }
+struct Q { y: int, x: int }
+
+// ---- 代数和类型（tag）：无载荷 / 单载荷变体 ----
+tag E = NotFound | BadInput(string)
+tag Op = Plus | Minus
+
+// ---- 泛型 fn（D-13：call-site 实例化，单份 proto 零代码膨胀）----
+fn first[T](xs: [T]) -> T {
+    return xs[0]
+}
+
+fn apply2[T, U](x: T, f: (T) -> U) -> U {
+    return f(x)
+}
+
+// ---- Result / try / match（决策 54）----
+// 注意：失败路径用 `return Err(...)`。`throw` 在运行期是穿透一切的
+// Raise（try 无捕获机制，见 26 号登记），二者不等价。
+fn find(xs: [int], want: int) -> Result[int, E] {
+    for i in 0..len(xs) {
+        if xs[i] == want {
+            return Ok(i)
+        }
+    }
+    return Err(NotFound)
+}
+
+fn eval(op: Op) -> int {
+    return match op {
+        Plus -> 1
+        Minus -> 0 - 1
+    }
+}
+
+// Result-match 的类型上下文来自 return 位（Y-T0018）：臂构造器 Ok/Err
+// 由此获得 Result[int, E] 类型；let 初始化位的臂会退化为 unit。
+fn probe(want: int) -> Result[int, E] {
+    let a = try find([3, 1, 4, 1, 5], 4)               // try 双传播（决策 54）：恒 Ok → 2
+    return match find([3, 1, 4, 1, 5], want) {         // 失败路径交给 match，不走 try
+        Ok(v) -> Ok(a * 10 + v)
+        Err(NotFound) -> Ok(0 - 1)
+        Err(other) -> Err(other)
+    }
+}
+
+pub fn main() -> Result[string, E] {
+    // ═══ 1. 算术 · floor 语义（决策 44）· 插值唯一拼串 ═══
+    let a = 7
+    let b = 2
+    print("[1] sum=${a + b} mod=${a % b} negmod=${(0 - 7) % 3} negdiv=${(0 - 7) / 3}")
+    print("[1] hex=${MAX_ROUNDS} big=${BIG}")
+
+    // ═══ 2. 浮点 · as 数值互转（决策 26）· 模块内建 ═══
+    let s = math.sqrt(16.0)
+    let fl = math.floor(3.7)
+    let fi = s as int
+    print("[2] sqrt=${s} floor=${fl} as-int=${fi}")
+
+    // ═══ 3. distinct 新类型（决策 23）═══
+    let dist: Meters = 5 as Meters
+    let back = dist as int
+    assert(back == 5, "distinct as roundtrip")
+    print("[3] distinct-roundtrip=${back}")
+
+    // ═══ 4. 泛型 call-site 实例化（D-13）═══
+    let gi = first([1, 2, 3])
+    let gs = first(["a", "b"])
+    let gd = apply2(5, fn(n: int) = n * n)
+    print("[4] first-int=${gi} first-str=${gs} apply2=${gd}")
+
+    // ═══ 5. lambda · 闭包按值快照（决策 31）· 嵌套祖父捕获（D-24）═══
+    let base = 100
+    let add = fn(x: int) = x + base
+    let nested = map([1, 2], fn(x: int) =
+        map([1, 2], fn(y: int) = y + x + base))        // 内层越级捕获：x（外层）+ base（祖父）
+    print("[5] closure=${add(5)} nested=${nested[1][1]}")
+
+    // ═══ 6. 管道 · 列表：切片（决策 42）· sort/map/fold 按值快照 ═══
+    let xs = [5, 3, 9, 1]
+    let total = xs |> map(fn(x) = x * 2) |> fold(0, fn(a, b) = a + b)
+    let sorted = sort(xs)
+    let head = xs[0..2]
+    let mut listsum = 0
+    for x in sorted {
+        listsum = listsum + x
+    }
+    print("[6] total=${total} sorted0=${sorted[0]} head1=${head[1]} listsum=${listsum} len=${len(xs)}")
+
+    // ═══ 7. map：缺键 nil（决策 55）· get/get_or · KV 迭代（决策 82）═══
+    let mut m: [string: int] = [:]
+    m["a"] = 1
+    m["b"] = 2
+    let miss = get(m, "z")
+    if miss == nil {
+        print("[7] miss-key=nil")
+    }
+    let hit = get_or(m, "b", 99)
+    let mut ksum = 0
+    for k in keys(m) {
+        ksum = ksum + len(k)
+    }
+    let mut order = ""
+    let mut acc = 0
+    for kv in m {
+        acc = acc + kv.value
+        order = "${order}${kv.key}"
+    }
+    print("[7] hit=${hit} ksum=${ksum} kv-order=${order} acc=${acc}")
+
+    // ═══ 8. struct：COW（决策 13）· spread 更新（决策 41）· mut 字段赋值 ═══
+    let sa = P { x: 1, y: 2 }
+    let sb = sa
+    let sc = P { ..sa, x: 10 }
+    let mut sd = P { x: 0, y: 0 }
+    sd.x = 9
+    sd.y += 3
+    let cow = sa.x * 100 + sb.x * 10 + sc.x            // 111：spread 不改原值
+    let sp = P { x: 1, y: 2 }
+    let sq = Q { y: 3, x: 4 }
+    let disamb = sp.x * 1000 + sp.y * 100 + sq.x * 10 + sq.y   // 1243
+    print("[8] cow=${cow} mut=${sd.x * 10 + sd.y} disamb=${disamb}")
+
+    // ═══ 9. 控制流：for/while/continue/break · if 表达式（D-17）═══
+    let mut ctl = 0
+    for i in 0..10 {
+        if i % 2 == 0 { continue }
+        if i > 7 { break }
+        ctl = ctl + i
+    }
+    let mut wn = 5
+    while wn > 0 { wn = wn - 1 }
+    let picked = if ctl > 10 { "many" } else { "few" }
+    print("[9] ctl=${ctl} while=${wn} pick=${picked} minmax=${min(3, 9)}${max(3, 9)}")
+
+    // ═══ 10. Option 收窄（决策 40）═══
+    let parsed = parse_int("21")
+    if parsed == nil {
+        return Ok("unreachable")
+    }
+    let doubled = parsed * 2
+
+    // ═══ 11. Result · try 双传播（决策 54）· match 全形态 · throw ═══
+    // try/match-Result 要求所在 fn 返回 Result 且错误类型一致（Y-T0019）
+    let hit2 = try find([3, 1, 4, 1, 5], 4)            // Ok 解包 → 2
+    let cls2 = try probe(9)                            // Err(NotFound) 路径 → -1
+    let opv = eval(Plus) * 10 + eval(Minus)            // 9
+    print("[11] parsed=${doubled} try=${hit2} match=${cls2} op=${opv}")
+
+    // ═══ 12. 字符串：码点 rune（决策 46，禁 s[i]）═══
+    let runes = string.to_runes("你好")
+    print("[12] runes=${len(runes)}")
+
+    return Ok("showcase ${cow}/${disamb}/${acc}/${order}/${ctl}/${picked}/${doubled}/${hit2}/${cls2}/${opv}")
+}

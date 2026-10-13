@@ -72,7 +72,7 @@ pub fn summarize(ctx: Ctx, items: [Item]) -> Result[string, Err] {
     let first = string.to_runes("你好")[0]   // rune 经迭代/切片获取，禁 s[i]（46）
     let wrapped = (total as int) % len(items)        // floor-mod 恒非负（决策 44）
     if n == nil {
-        return Err(NotFound)                 // 等价写法：throw NotFound
+        return Err(NotFound)                 // 失败路径用 return Err（throw 是穿透 Raise，26 号 D-21）
     }
     return Ok("head=${len(head)} first=${first} mod=${wrapped}")
 }

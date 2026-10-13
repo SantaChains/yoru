@@ -6,6 +6,8 @@
 ## [Unreleased]
 
 ### Added
+- **语言特色全景单文件示范 `examples/showcase.yoru`（2026-10-13）**：12 节覆盖常量折叠 / distinct / 泛型 call-site 实例化 / 闭包快照与嵌套祖父捕获 / 管道与切片 / map KV 迭代 / struct COW 与 spread 更新 / 槽位消歧 / 控制流 / Option 收窄 / Result-match 全形态 / rune——单文件 e2e 回归网（`showcase_e2e_full_feature_file`：typeck→lower→verify→demo host 运行，12 节输出逐行钉死），LBC0 build/run 往返输出一致。
+- **Result-match Ok/Err 模式（2026-10-13，26 号 D-27）**：`match r { Ok(v) -> ... Err(e) -> ... }` 此前被 typeck 整体拒绝（Y-T0002「变体模式要求 tag 类型」）——运行时早已支持而 typeck 缺位，VM 测试不含 typeck 故未暴露（showcase 红证）。`check_pattern` 增 `Ty::Res` 的 Ok/Err 模式臂（payload 为绑定名，与 lower 语义一致），`check_match` 穷尽性认 Ok+Err 齐备。注：Result-match 实际限 return 表达式位（构造器类型上下文来自函数返回类型，Y-T0018）。
 - **泛型函数与数据类型（2026-10-13，30 号序 8 泛型批次）**：`fn f[T, U](xs: [T]) -> U` 泛型函数 call-site 实例化——声明期 `T` 解析为类型变量，调用位按实参 unify 绑定（`first([1,2])` → int、`first(["a"])` → string，同函数多实例化零代码膨胀：统一 Value 表示下单份字节码承载全部实例）；lambda 实参参与推断（`apply2(7, fn(n) = "s")` → U=string）；返回类型含未绑定泛型 → 结构化 Y-T0018。泛型 struct/tag 变体构造按载荷反推类型实参（`Boxed(P2<int> { .. })` → `Box2<int>`）+ 泛型变体 match 模式匹配全链工作。类型位方括号兼容形式 `Name[T]` 可用；表达式位类型实参用规范形式 `Name<int>`（`[T]` 与索引文法冲突，裁决限类型位）。
 - **Map 迭代 KV entry（2026-10-13，决策 82 第二步）**：`for kv in m` 产出内建 `KV { key, value }` struct（插入序快照）——`kv.key`/`kv.value` 字段访问与 `${}` 插值全链工作；纯键通道迁移为 `for k in keys(m)`（keys 内建既有）。`KV` 为保留类型名（声明拒绝 Y-T0005）。**破坏性**：LBC0 major 2.0——旧 1.x 产物的键语义与本版不符，重新编译即可。
 - **VM 取指热路径合并（2026-10-13，P1 首步，25 号 §A）**：step() 单次帧尾访问取 (proto, pc) 并推进 + `Frame.proto` 直存（省每条一次 Rc 解引用）。受控 A/B ~1%（严格减法保留）；同批证据裁决：Quickening 算术特化在当前负载形态下建模收益 ~1% 不抵架构成本，**诚实延后**（触发条件：算术密集负载 Add/Sub/Mul/Div 直方图占比 >25%）。
@@ -21,6 +23,7 @@
 - **S 线稳定性与极限压测（2026-10-13，25 号 §4-c，测试 +6）**：①长跑确定性（200k 迭代 >1M 指令，双 VM 逐位同结果 + 指令数一致）；②停机时延量化界（钩子第 k 次触发时 instructions ≤ k·check_interval + 1）；③极值算术矩阵（MIN±1 / MIN×-1 / MIN÷-1 / MIN%-1 / -MIN 全部结构化 Y-R9001，debug 构建零 panic 面）；④退化输入（空源/仅注释/缺 main → 结构化 Y-R9000）；⑤无界增长（循环字符串拼接 → 堆限逐次拦截）。
 
 ### Fixed
+- **解析器链长预算试探性扣费（2026-10-13，26 号 D-01 终审）**：`Y-S9502`（expression chain too long）原在六个链式解析站的 `wrap_guard()` 前置于运算符匹配——每个表达式按优先级层数（≈7 层）白扣预算，百行级普通文件即可触顶（此前一轮复核误判「不可复现」，showcase.yoru 红证推翻：前 115 行 ≈60 条语句即耗尽 1000 预算）。修复为试探零成本（guard 后置到运算符命中），预算语义收敛为**单文件实际链长 ≤1000**——50k 项加法链拒绝测试语义保持。spec 19 / demo.yoru「`return Err(NotFound)` 等价写法：throw」注释更正：`throw` 运行期是穿透一切的 Raise（D-21），与 `return Err` 不等价。
 - **const 折叠语义分叉（2026-10-13，决策 44 透明性）**：`fold_const` 原用截断 `checked_div/checked_rem`，与 VM 运行时 floor 语义（`div_euclid/rem_euclid`）分叉——同一表达式 const 声明与 let 赋值结果不同（`(0-7)/3`：折叠 -2 vs 运行时 -3；`(0-7)%3`：-1 vs 2，红证实锤）。修复为 `checked_div_euclid/checked_rem_euclid`，回归测试锁定 const 折叠与运行时逐位一致。
 
 ### Added

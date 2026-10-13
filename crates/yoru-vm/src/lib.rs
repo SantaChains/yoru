@@ -2136,6 +2136,45 @@ mod tests {
         assert_eq!(vm1.take_output(), vm2.take_output());
     }
 
+    // ---- e2e：语言特色全景 showcase（单文件全特性回归网）----
+
+    #[test]
+    fn showcase_e2e_full_feature_file() {
+        // examples/showcase.yoru：typeck（demo 宿主 env）→ lower → verify →
+        // demo host 运行，输出逐行钉死——语言面回归的一文件快照。
+        let src = include_str!("../../../examples/showcase.yoru");
+        let env = yoru_typeck::Env::core().with_demo_host();
+        let (diags, ok) = yoru_typeck::check_source(src, &env);
+        assert!(ok, "showcase typeck 必须全绿: {diags:?}");
+        let program = parse_source(src).expect("parse");
+        let m = yoru_bytecode::lower(&program).expect("lower");
+        yoru_bytecode::verify_module(&m).expect("verify");
+        let mut inst = Instance::new(m);
+        demo::install_demo_host(&mut inst);
+        let mut vm = Vm::new();
+        let v = vm.run(inst, None, vec![]).expect("run");
+        assert!(
+            matches!(v, Value::Variant(_)),
+            "main 返回 Ok(...) 变体，got {v:?}"
+        );
+        let out = String::from_utf8(vm.take_output()).expect("utf8");
+        for line in [
+            "[1] sum=9 mod=1 negmod=2 negdiv=-3",    // 决策 44 floor 语义
+            "[2] sqrt=4.0 floor=3 as-int=4",         // as 数值互转
+            "[3] distinct-roundtrip=5",              // 决策 23
+            "[4] first-int=1 first-str=a apply2=25", // D-13 泛型双实例
+            "[5] closure=105 nested=104",            // D-24 祖父捕获
+            "[6] total=36 sorted0=1 head1=3 listsum=18 len=4",
+            "[7] hit=2 ksum=2 kv-order=ab acc=3", // 决策 82 KV
+            "[8] cow=120 mut=93 disamb=1243",     // 决策 13/41 + P0b 消歧
+            "[9] ctl=16 while=0 pick=many minmax=39",
+            "[11] parsed=42 try=2 match=-1 op=9", // 决策 54 + Result-match
+            "[12] runes=2",                       // 决策 46
+        ] {
+            assert!(out.contains(line), "missing `{line}` in:\n{out}");
+        }
+    }
+
     // ---- e2e：权威样例 summarize（demo 宿主 + Ctx）----
 
     #[test]
