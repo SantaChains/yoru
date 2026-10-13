@@ -14,12 +14,12 @@
 //! gen.rs 深度守卫（MAX_NEST）+ typeck/lower 内部 16MB 栈线程；
 //! cargo-fuzz CI 侧由 ASan 兜底。
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use yoru_vm::Limits;
 
 pub mod corpus;
-pub use corpus::{mutate, seeds, Rng};
+pub use corpus::{Rng, mutate, seeds};
 
 #[cfg(test)]
 mod tests;
@@ -78,21 +78,36 @@ pub fn fuzz_case(seed_src: &str, rng: &mut Rng) -> Outcome {
     let src = match catch_unwind(AssertUnwindSafe(|| mutate(seed_src, rng))) {
         Ok(Some(s)) => s,
         Ok(None) => return Outcome::Skipped,
-        Err(p) => return Outcome::Panicked { stage: Stage::Lex, msg: panic_msg(p) },
+        Err(p) => {
+            return Outcome::Panicked {
+                stage: Stage::Lex,
+                msg: panic_msg(p),
+            };
+        }
     };
 
     // ---- 阶段 2：parse ----
     let program = match catch_unwind(AssertUnwindSafe(|| yoru_syntax::parse_source(&src))) {
         Ok(Ok(program)) => program,
         Ok(Err(_)) => return Outcome::Reached(Stage::Lex),
-        Err(p) => return Outcome::Panicked { stage: Stage::Parse, msg: panic_msg(p) },
+        Err(p) => {
+            return Outcome::Panicked {
+                stage: Stage::Parse,
+                msg: panic_msg(p),
+            };
+        }
     };
 
     // ---- 阶段 3：typeck（内部 16MB 栈线程，panic 经 resume_unwind 传出）----
     let env = yoru_typeck::Env::core();
     let checked = match catch_unwind(AssertUnwindSafe(|| yoru_typeck::check_source(&src, &env))) {
         Ok((_, ok)) => ok,
-        Err(p) => return Outcome::Panicked { stage: Stage::Typeck, msg: panic_msg(p) },
+        Err(p) => {
+            return Outcome::Panicked {
+                stage: Stage::Typeck,
+                msg: panic_msg(p),
+            };
+        }
     };
 
     // ---- 阶段 4：lower（typeck 通过才值得降级；同内部线程）----
@@ -100,7 +115,12 @@ pub fn fuzz_case(seed_src: &str, rng: &mut Rng) -> Outcome {
         let module = match catch_unwind(AssertUnwindSafe(|| yoru_bytecode::lower(&program))) {
             Ok(Ok(m)) => m,
             Ok(Err(_)) => return Outcome::Reached(Stage::Typeck),
-            Err(p) => return Outcome::Panicked { stage: Stage::Lower, msg: panic_msg(p) },
+            Err(p) => {
+                return Outcome::Panicked {
+                    stage: Stage::Lower,
+                    msg: panic_msg(p),
+                };
+            }
         };
 
         // ---- 阶段 5：run（有限步 = 资源三限；预算收紧以保吞吐）----
@@ -118,7 +138,10 @@ pub fn fuzz_case(seed_src: &str, rng: &mut Rng) -> Outcome {
             let _ = vm.take_output();
         }));
         if let Err(p) = outcome {
-            return Outcome::Panicked { stage: Stage::Run, msg: panic_msg(p) };
+            return Outcome::Panicked {
+                stage: Stage::Run,
+                msg: panic_msg(p),
+            };
         }
         return Outcome::Reached(Stage::Run);
     }

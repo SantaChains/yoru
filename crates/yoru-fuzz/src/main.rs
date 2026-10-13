@@ -6,7 +6,7 @@
 //! - 结束时打印分阶段统计，存在 panic 则 exit 1；
 //! - 确定性：`(seed, case_id)` 二元组可精确重放任何 case。
 
-use yoru_fuzz::{fuzz_case, seeds, Rng, Stage};
+use yoru_fuzz::{Rng, Stage, fuzz_case, seeds};
 
 fn main() {
     let mut iters: u64 = 10_000;
@@ -20,7 +20,11 @@ fn main() {
             "--seed" => {
                 seed = args
                     .next()
-                    .and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).or_else(|_| v.parse()).ok())
+                    .and_then(|v| {
+                        u64::from_str_radix(v.trim_start_matches("0x"), 16)
+                            .or_else(|_| v.parse())
+                            .ok()
+                    })
                     .unwrap_or(seed);
             }
             other => {
@@ -45,13 +49,22 @@ fn main() {
             yoru_fuzz::Outcome::Reached(stage) => stats[stage_index(stage)] += 1,
             yoru_fuzz::Outcome::Skipped => skipped += 1,
             yoru_fuzz::Outcome::Panicked { stage, msg } => {
-                let key = (stage.name().to_string(), msg.lines().next().unwrap_or("").to_string());
-                if let Some(e) = panicked.iter_mut().find(|(s, m, _)| *s == key.0 && *m == key.1) {
+                let key = (
+                    stage.name().to_string(),
+                    msg.lines().next().unwrap_or("").to_string(),
+                );
+                if let Some(e) = panicked
+                    .iter_mut()
+                    .find(|(s, m, _)| *s == key.0 && *m == key.1)
+                {
                     e.2 += 1;
                 } else {
                     let path = format!("fuzz-artifacts/crash_case{case_id}_{}.yoru", stage.name());
                     let _ = std::fs::create_dir("fuzz-artifacts");
-                    let _ = std::fs::write(&path, format!("// seed=0x{seed:X} case={case_id} stage={}\n", stage.name()));
+                    let _ = std::fs::write(
+                        &path,
+                        format!("// seed=0x{seed:X} case={case_id} stage={}\n", stage.name()),
+                    );
                     panicked.push((key.0, key.1, 1));
                     eprintln!("PANIC @ {} case {case_id}: archived {path}", stage.name());
                 }
@@ -66,8 +79,18 @@ fn main() {
     eprintln!("\n=== V0 fuzz report ===");
     eprintln!("iters={iters} seed=0x{seed:X} skipped={skipped}");
     for (i, n) in stats.iter().enumerate() {
-        let name = [Stage::Lex, Stage::Parse, Stage::Typeck, Stage::Lower, Stage::Run][i].name();
-        eprintln!("reached {name}: {n} ({:.1}%)", *n as f64 * 100.0 / total.max(1) as f64);
+        let name = [
+            Stage::Lex,
+            Stage::Parse,
+            Stage::Typeck,
+            Stage::Lower,
+            Stage::Run,
+        ][i]
+            .name();
+        eprintln!(
+            "reached {name}: {n} ({:.1}%)",
+            *n as f64 * 100.0 / total.max(1) as f64
+        );
     }
     if panicked.is_empty() {
         eprintln!("panic-free ✓");

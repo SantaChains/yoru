@@ -66,7 +66,9 @@ fn resolve_brace_queries(tokens: &[yoru_syntax::Token], mut queries: Vec<usize>,
 
 fn visit_decl(d: &ast::Decl, p: &mut Plan, q: &mut Vec<usize>) {
     match &d.kind {
-        DeclKind::Import { .. } | DeclKind::Const { .. } | DeclKind::Type { .. }
+        DeclKind::Import { .. }
+        | DeclKind::Const { .. }
+        | DeclKind::Type { .. }
         | DeclKind::Tag { .. } => {}
         DeclKind::Struct { fields, .. } => {
             if let Some(f) = fields.first() {
@@ -195,7 +197,11 @@ fn visit_expr(e: &ast::Expr, p: &mut Plan, q: &mut Vec<usize>) {
                 visit_expr(v, p, q);
             }
         }
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_)
-        | ExprKind::Nil | ExprKind::Ident(_) => {}
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Nil
+        | ExprKind::Ident(_) => {}
     }
 }

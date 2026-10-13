@@ -51,7 +51,11 @@ fn decl(d: &ast::Decl, s: &mut String) {
                 }
             }
         }
-        DeclKind::Tag { name, params, variants } => {
+        DeclKind::Tag {
+            name,
+            params,
+            variants,
+        } => {
             let _ = params;
             s.push_str("tag ");
             s.push_str(name);
@@ -60,7 +64,11 @@ fn decl(d: &ast::Decl, s: &mut String) {
                 variant(v, s);
             }
         }
-        DeclKind::Struct { name, params, fields } => {
+        DeclKind::Struct {
+            name,
+            params,
+            fields,
+        } => {
             let _ = params;
             s.push_str("struct ");
             s.push_str(name);
@@ -92,7 +100,12 @@ fn decl(d: &ast::Decl, s: &mut String) {
                 s.push(')');
             }
         }
-        DeclKind::Impl { proto, for_, params, fns } => {
+        DeclKind::Impl {
+            proto,
+            for_,
+            params,
+            fns,
+        } => {
             let _ = params;
             s.push_str("impl ");
             s.push_str(proto);
@@ -161,7 +174,12 @@ fn block(b: &ast::Block, s: &mut String) {
 fn stmt(st: &ast::Stmt, s: &mut String) {
     s.push('(');
     match &st.kind {
-        StmtKind::Let { mut_, name, ty: t, value } => {
+        StmtKind::Let {
+            mut_,
+            name,
+            ty: t,
+            value,
+        } => {
             s.push_str("let ");
             if *mut_ {
                 s.push_str("mut ");
@@ -206,13 +224,19 @@ fn stmt(st: &ast::Stmt, s: &mut String) {
 fn expr(e: &ast::Expr, s: &mut String) {
     s.push('(');
     match &e.kind {
-        ExprKind::Int(v) => { let _ = write!(s, "int({v})"); }
-        ExprKind::Float(v) => { let _ = write!(s, "float({v:?})"); }
+        ExprKind::Int(v) => {
+            let _ = write!(s, "int({v})");
+        }
+        ExprKind::Float(v) => {
+            let _ = write!(s, "float({v:?})");
+        }
         ExprKind::Str(parts) => {
             s.push_str("str[");
             for p in parts {
                 match p {
-                    ast::StrItem::Lit(t) => { let _ = write!(s, "\"{t}\""); }
+                    ast::StrItem::Lit(t) => {
+                        let _ = write!(s, "\"{t}\"");
+                    }
                     ast::StrItem::Interp(x) => {
                         s.push('$');
                         expr(x, s);
@@ -221,7 +245,9 @@ fn expr(e: &ast::Expr, s: &mut String) {
             }
             s.push(']');
         }
-        ExprKind::Bool(v) => { let _ = write!(s, "bool({v})"); }
+        ExprKind::Bool(v) => {
+            let _ = write!(s, "bool({v})");
+        }
         ExprKind::Nil => s.push_str("nil"),
         ExprKind::Ident(n) => s.push_str(n),
         ExprKind::Lambda { params, body } => {
@@ -324,7 +350,12 @@ fn expr(e: &ast::Expr, s: &mut String) {
             s.push_str(" as ");
             ty(t, s);
         }
-        ExprKind::StructLit { name, type_args, inits, spread } => {
+        ExprKind::StructLit {
+            name,
+            type_args,
+            inits,
+            spread,
+        } => {
             s.push_str(name);
             for t in type_args {
                 s.push('<');
@@ -406,13 +437,19 @@ fn bin_op(op: BinOp) -> &'static str {
 
 fn pat(p: &ast::Pattern, s: &mut String) {
     match p {
-        ast::Pattern::Int(v) => { let _ = write!(s, "int({v})"); }
-        ast::Pattern::Float(v) => { let _ = write!(s, "float({v:?})"); }
+        ast::Pattern::Int(v) => {
+            let _ = write!(s, "int({v})");
+        }
+        ast::Pattern::Float(v) => {
+            let _ = write!(s, "float({v:?})");
+        }
         ast::Pattern::Str(parts) => {
             s.push_str("str[");
             for x in parts {
                 match x {
-                    ast::StrItem::Lit(t) => { let _ = write!(s, "\"{t}\""); }
+                    ast::StrItem::Lit(t) => {
+                        let _ = write!(s, "\"{t}\"");
+                    }
                     ast::StrItem::Interp(e) => {
                         s.push('$');
                         expr(e, s);
@@ -421,7 +458,9 @@ fn pat(p: &ast::Pattern, s: &mut String) {
             }
             s.push(']');
         }
-        ast::Pattern::Bool(v) => { let _ = write!(s, "bool({v})"); }
+        ast::Pattern::Bool(v) => {
+            let _ = write!(s, "bool({v})");
+        }
         ast::Pattern::Nil => s.push_str("nil"),
         ast::Pattern::Bind(n) => s.push_str(n),
         ast::Pattern::Variant { name, payload } => {

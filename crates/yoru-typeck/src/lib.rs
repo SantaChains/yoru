@@ -113,7 +113,9 @@ mod tests {
             "fn main() -> int {\n    let mut m: [string: int] = [:]\n    m[\"a\"] = 1\n    let n = 0\n    for k in m {\n        print(k)\n    }\n    return n\n}\n",
         );
         assert!(ok.is_empty(), "for k in map 不应报错: {ok:#?}");
-        let bad = errors("fn main() -> int {\n    for x in 5 {\n        print(x)\n    }\n    return 0\n}\n");
+        let bad = errors(
+            "fn main() -> int {\n    for x in 5 {\n        print(x)\n    }\n    return 0\n}\n",
+        );
         assert_eq!(codes(&bad), vec!["Y-T0002"], "{bad:#?}");
     }
 
@@ -168,7 +170,9 @@ mod tests {
     fn unwrap_on_narrowed_ident_allowed() {
         // D-04（26 号登记）：nil 收窄（决策 40）后 `o!` 是恒等解包，
         // 曾被 Y-T0004 误拦且诊断自相矛盾（帮助文本自己建议先做 nil 检查）。
-        let ds = errors("fn f(o: int?) -> int {\n    if o != nil {\n        let v = o!\n        return v + 1\n    }\n    return 0\n}\n");
+        let ds = errors(
+            "fn f(o: int?) -> int {\n    if o != nil {\n        let v = o!\n        return v + 1\n    }\n    return 0\n}\n",
+        );
         assert!(ds.is_empty(), "收窄分支内 `!` 不应报错: {ds:#?}");
     }
 

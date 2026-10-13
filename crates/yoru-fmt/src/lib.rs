@@ -51,9 +51,11 @@ impl Fidelity {
 /// span-blind 例外修正：`StrPart::Interp(Vec<Token>)` 内嵌带 span 的 token
 /// （29 号 D3「kind 天然 span-blind」的插值盲区）——此处递归把内嵌 span 归零。
 fn token_key(tok: &Token, src: &str) -> (TokenKind, String) {
-    (strip_spans(&tok.kind), src[tok.span.start..tok.span.end].to_owned())
+    (
+        strip_spans(&tok.kind),
+        src[tok.span.start..tok.span.end].to_owned(),
+    )
 }
-
 
 fn strip_spans(k: &TokenKind) -> TokenKind {
     match k {
@@ -83,7 +85,11 @@ pub fn verify(src: &str, out: &str) -> Result<Fidelity, Vec<Diagnostic>> {
     let (t1, d1) = yoru_syntax::tokenize(src);
     let (t2, d2) = yoru_syntax::tokenize(out);
     if d1.iter().any(|d| d.is_error()) || d2.iter().any(|d| d.is_error()) {
-        return Err(if d1.iter().any(|d| d.is_error()) { d1 } else { d2 });
+        return Err(if d1.iter().any(|d| d.is_error()) {
+            d1
+        } else {
+            d2
+        });
     }
     let seq = |toks: &[Token], s: &str| -> Vec<(TokenKind, String)> {
         toks.iter()

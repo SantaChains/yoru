@@ -1030,9 +1030,12 @@ impl Vm {
                             self.with_list_mut(l, |v| v[i as usize] = value)
                         }
                         Value::Map(m) => self.with_map_mut(m, idx, value).map(Value::Map),
-                        other => break 'op Err(
-                            self.rerr("Y-R9013", format!("cannot index-assign {}", other.display()))
-                        ),
+                        other => {
+                            break 'op Err(self.rerr(
+                                "Y-R9013",
+                                format!("cannot index-assign {}", other.display()),
+                            ));
+                        }
                     }
                 };
                 self.frames.last_mut().expect("frame").locals[slot] = out?;
@@ -1528,7 +1531,9 @@ mod tests {
         let (diags, ok) = yoru_typeck::check_source(src, &yoru_typeck::Env::core());
         assert!(!ok, "int? must not assign to int");
         assert!(
-            diags.iter().any(|d| d.is_error() && d.message.contains("int?")),
+            diags
+                .iter()
+                .any(|d| d.is_error() && d.message.contains("int?")),
             "expect int? mismatch diagnostic, got {diags:?}"
         );
     }
@@ -1606,10 +1611,8 @@ mod tests {
 
     #[test]
     fn inline_block_comment_in_expression() {
-        let v = run_src(
-            "pub fn main() -> int {\n    let b = 1 /* mid */ + 2\n    return b\n}\n",
-        )
-        .expect("run");
+        let v = run_src("pub fn main() -> int {\n    let b = 1 /* mid */ + 2\n    return b\n}\n")
+            .expect("run");
         assert_eq!(v, Value::Int(3));
     }
 
@@ -1646,7 +1649,6 @@ mod tests {
         assert_eq!(v, Value::Nil);
     }
 
-
     #[test]
     fn format_value_resolves_tag_names() {
         let src = "tag MyErr = NotFound | Bad(string)\npub fn main() -> MyErr {\n    return Bad(\"x\")\n}\n";
@@ -1674,7 +1676,6 @@ mod tests {
             other => panic!("expect Raised, got {other:?}"),
         }
     }
-
 
     // ---- 26 号登记修复回归（D-06/07/08/09/17、D-05+20 表示统一）----
 

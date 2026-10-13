@@ -1,7 +1,7 @@
 //! V0 smoke：cargo test 有界验证（30 号 §6.1「验收 = panic 零命中」）。
 //! 长跑用 bin（`--profile fuzz`），此处 debug 模式小规模常驻回归。
 
-use crate::{fuzz_case, seeds, Outcome, Rng};
+use crate::{Outcome, Rng, fuzz_case, seeds};
 
 /// 固定种子确定性 smoke：种子轮转 × 800 case，零 panic 契约断言。
 #[test]
@@ -26,7 +26,10 @@ fn v0_panic_free_smoke() {
     // 从不失败，故不作断言）。全零说明变异器或 harness 失效。
     for stage in ["lex", "parse", "run"] {
         let n = reached.get(stage).copied().unwrap_or(0);
-        assert!(n > 0, "stage {stage} never reached — harness coverage broken: {reached:?}");
+        assert!(
+            n > 0,
+            "stage {stage} never reached — harness coverage broken: {reached:?}"
+        );
     }
     if !failures.is_empty() {
         let report = failures

@@ -1507,7 +1507,10 @@ impl Parser {
                     // 直至 Y-S9502 wrap 预算触顶（`${o!}` 以 `!` 结尾即复现）。
                     if let Some(last) = tokens.last() {
                         let span = last.span;
-                        tokens.push(Token { kind: TokenKind::Eof, span });
+                        tokens.push(Token {
+                            kind: TokenKind::Eof,
+                            span,
+                        });
                     }
                     let mut sub = Parser {
                         tokens,

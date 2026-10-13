@@ -9,11 +9,12 @@ use crate::{format, verify};
 fn assert_roundtrip(src: &str) -> String {
     let out = format(src).unwrap_or_else(|d| panic!("format failed: {d:#?}\nsrc:\n{src}"));
     let f = verify(src, &out).unwrap_or_else(|d| {
-        panic!(
-            "verify diag: {d:#?}\n--- src ---\n{src}\n--- out ---\n{out}<<<EOF>>>"
-        )
+        panic!("verify diag: {d:#?}\n--- src ---\n{src}\n--- out ---\n{out}<<<EOF>>>")
     });
-    assert!(f.ok(), "fidelity failed: {f:?}\n--- src ---\n{src}\n--- out ---\n{out}<<<EOF>>>");
+    assert!(
+        f.ok(),
+        "fidelity failed: {f:?}\n--- src ---\n{src}\n--- out ---\n{out}<<<EOF>>>"
+    );
     out
 }
 
@@ -83,7 +84,8 @@ fn normalizes_joining_legal_inline_contexts() {
 fn block_layout_statements_one_per_line() {
     let src = "fn f() {\nlet a = 1\nlet b = 2\nif a == 1 {\nlet c = 3\n}\n}\n";
     let out = assert_roundtrip(src);
-    let expected = "fn f() {\n    let a = 1\n    let b = 2\n    if a == 1 {\n        let c = 3\n    }\n}\n";
+    let expected =
+        "fn f() {\n    let a = 1\n    let b = 2\n    if a == 1 {\n        let c = 3\n    }\n}\n";
     assert_eq!(out, expected, "块体逐行 + 缩进层级");
 }
 
@@ -136,7 +138,8 @@ fn comment_after_continuation_keeps_semantics() {
 
 #[test]
 fn comment_between_decls_stays_own_line() {
-    let src = "fn a() -> int {\n    return 1\n}\n\n// section b\nfn b() -> int {\n    return 2\n}\n";
+    let src =
+        "fn a() -> int {\n    return 1\n}\n\n// section b\nfn b() -> int {\n    return 2\n}\n";
     let out = assert_roundtrip(src);
     assert!(out.contains("}\n\n// section b\nfn b()"), "{out}");
 }
@@ -158,14 +161,20 @@ fn struct_decl_fields_newline_separated() {
     // L3：struct_decl 字段无逗号文法——多行声明靠换行分隔
     let src = "pub struct Vec2 {\n    x: float\n    y: float\n}\n";
     let out = assert_roundtrip(src);
-    assert!(out.contains("pub struct Vec2 {\n    x: float\n    y: float\n}"), "{out}");
+    assert!(
+        out.contains("pub struct Vec2 {\n    x: float\n    y: float\n}"),
+        "{out}"
+    );
 }
 
 #[test]
 fn pipeline_and_lambda_spacing() {
     let src = "fn f(xs: [int]) -> int {\n    return xs |> map(fn(x: int) = x * 2) |> fold(0, fn(a: int, b: int) = a + b)\n}\n";
     let out = assert_roundtrip(src);
-    assert!(out.contains("|> map(fn(x: int) = x * 2) |> fold(0, fn(a: int, b: int) = a + b)"), "{out}");
+    assert!(
+        out.contains("|> map(fn(x: int) = x * 2) |> fold(0, fn(a: int, b: int) = a + b)"),
+        "{out}"
+    );
 }
 
 #[test]

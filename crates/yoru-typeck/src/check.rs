@@ -650,7 +650,9 @@ impl<'e> Checker<'e> {
                                 format!("for 只能迭代 list/string/map/range，得到 `{other}`"),
                                 s,
                             )
-                            .with_suggestion("Map 迭代产出键；键值对经 `m[k]` 或未来 KV entry（决策 82）"),
+                            .with_suggestion(
+                                "Map 迭代产出键；键值对经 `m[k]` 或未来 KV entry（决策 82）",
+                            ),
                         );
                         Ty::Unit
                     }

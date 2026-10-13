@@ -195,8 +195,8 @@ impl Value {
     {
         match self {
             Value::Variant(v) => {
-                let name = resolve(v.tag, v.variant)
-                    .unwrap_or_else(|| format!("<variant {}>", v.variant));
+                let name =
+                    resolve(v.tag, v.variant).unwrap_or_else(|| format!("<variant {}>", v.variant));
                 match &v.payload {
                     Some(p) => format!("{name}({})", p.display()),
                     None => name,
