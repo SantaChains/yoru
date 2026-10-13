@@ -976,14 +976,16 @@ impl Parser {
     fn parse_or(&mut self) -> Expr {
         let mut lhs = self.parse_range();
         while !self.at_eof() {
-            if !self.wrap_guard() {
-                break;
-            }
             let op = match self.peek().kind.clone() {
                 TokenKind::OrOr => BinOp::Or,
                 TokenKind::Ident(w) if w == "or" => BinOp::Or, // 软关键字
                 _ => break,
             };
+            // 预算只在实际成链时扣（试探零成本）：guard 前置于运算符匹配会
+            // 按优先级层数对每个表达式白扣预算，普通文件即可触顶 Y-S9502。
+            if !self.wrap_guard() {
+                break;
+            }
             self.bump();
             let rhs = self.parse_range();
             let span = lhs.span.merge(rhs.span);
@@ -1020,14 +1022,14 @@ impl Parser {
     fn parse_and(&mut self) -> Expr {
         let mut lhs = self.parse_pipe();
         while !self.at_eof() {
-            if !self.wrap_guard() {
-                break;
-            }
             let op = match self.peek().kind.clone() {
                 TokenKind::AndAnd => BinOp::And,
                 TokenKind::Ident(w) if w == "and" => BinOp::And, // 软关键字
                 _ => break,
             };
+            if !self.wrap_guard() {
+                break;
+            }
             self.bump();
             let rhs = self.parse_pipe();
             let span = lhs.span.merge(rhs.span);
@@ -1104,11 +1106,11 @@ impl Parser {
     fn parse_shift(&mut self) -> Expr {
         let mut lhs = self.parse_add();
         'outer: while !self.at_eof() {
-            if !self.wrap_guard() {
-                break;
-            }
             for (k, op) in [(TokenKind::Shl, BinOp::Shl), (TokenKind::Shr, BinOp::Shr)] {
                 if self.at(&k) {
+                    if !self.wrap_guard() {
+                        break 'outer;
+                    }
                     self.bump();
                     let rhs = self.parse_add();
                     let span = lhs.span.merge(rhs.span);
@@ -1142,11 +1144,11 @@ impl Parser {
     fn chain(&mut self, op: BinOp, kinds: &[TokenKind], next: fn(&mut Self) -> Expr) -> Expr {
         let mut lhs = next(self);
         'outer: while !self.at_eof() {
-            if !self.wrap_guard() {
-                break;
-            }
             for k in kinds {
                 if self.at(k) {
+                    if !self.wrap_guard() {
+                        break 'outer;
+                    }
                     self.bump();
                     let rhs = next(self);
                     let span = lhs.span.merge(rhs.span);
@@ -1169,11 +1171,11 @@ impl Parser {
     fn chain_multi(&mut self, kinds: &[TokenKind], next: fn(&mut Self) -> Expr) -> Expr {
         let mut lhs = next(self);
         'outer: while !self.at_eof() {
-            if !self.wrap_guard() {
-                break;
-            }
             for k in kinds {
                 if self.at(k) {
+                    if !self.wrap_guard() {
+                        break 'outer;
+                    }
                     let op = match k {
                         TokenKind::Plus => BinOp::Add,
                         TokenKind::Minus => BinOp::Sub,
@@ -1230,6 +1232,15 @@ impl Parser {
             // 会使本循环永不前进 → pos 越界即断（wrap_guard 触顶前的死自旋根因）。
             if self.pos >= self.tokens.len() {
                 break;
+            }
+            // 试探零成本：非后缀 token 直接断，不扣链长预算（与二元链同口径）
+            match self.peek().kind.clone() {
+                TokenKind::LParen
+                | TokenKind::Dot
+                | TokenKind::LBracket
+                | TokenKind::Bang
+                | TokenKind::As => {}
+                _ => break,
             }
             if !self.wrap_guard() {
                 break;

@@ -144,6 +144,33 @@ mod tests {
     }
 
     #[test]
+    fn wrap_budget_counts_links_not_probes() {
+        // 链长预算（Y-S9502）只数实际成链的 wrap：guard 前置于运算符匹配的
+        // 旧序按优先级层数对每个表达式白扣预算（or/and/shift/chain/chain_
+        // multi/postfix 六站），百行级普通文件即可触顶。300 条语句 × 2 实际
+        // 链 + 后缀试探 = 600 实际 wrap，远低于 1000 闸；旧序 ~7 倍膨胀必触顶。
+        let mut src = String::from("pub fn main() -> int {\n");
+        for i in 0..300 {
+            src.push_str(&format!("    let x{i} = {i} + {i} * 2\n"));
+        }
+        src.push_str("    return x0 + len([1, 2])\n}\n");
+        let parsed = parse_source(&src);
+        assert!(
+            !matches!(&parsed, Err(d) if d.iter().any(|d| d.code.as_deref() == Some("Y-S9502"))),
+            "probe-only chains must not burn wrap budget: {parsed:?}"
+        );
+
+        // 语义保持：真正的超长链（50k 实际链）仍被拒绝
+        let mut deep = String::from("pub fn main() -> int {\n    return 0");
+        for _ in 0..50_000 {
+            deep.push_str(" + 1");
+        }
+        deep.push_str("\n}\n");
+        let ds = parse_source(&deep).unwrap_err();
+        assert!(ds.iter().any(|d| d.code.as_deref() == Some("Y-S9502")));
+    }
+
+    #[test]
     fn banned_bidi_char_is_error() {
         let src = "let x = 1 \u{202E}\n";
         assert!(parse_source(src).is_err());
