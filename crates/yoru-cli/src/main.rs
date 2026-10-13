@@ -43,7 +43,16 @@ fn main() -> ExitCode {
             for a in &args[2..] {
                 match a.as_str() {
                     "--host=demo" | "--host" => host_demo = true,
-                    s if s.starts_with("--out=") => out = Some(s["--out=".len()..].to_string()),
+                    s if s.starts_with("--out=") => {
+                        // 空值显式拒绝：落进 write 路径只会得到 "cannot write :"
+                        // 这种不可读错误（交互习惯：坏输入在解析层给出可读诊断）。
+                        let v = &s["--out=".len()..];
+                        if v.is_empty() {
+                            eprintln!("error: --out expects a file path");
+                            return ExitCode::from(2);
+                        }
+                        out = Some(v.to_string());
+                    }
                     s if !s.starts_with('-') => path = Some(s.to_string()),
                     s => {
                         eprintln!("error: unknown flag `{s}`");
@@ -70,7 +79,14 @@ fn main() -> ExitCode {
                     "--host=demo" | "--host" => host_demo = true,
                     "--stats" => show_stats = true,
                     s if s.starts_with("--entry=") => {
-                        entry = Some(s["--entry=".len()..].to_string())
+                        // 空值解析层拒绝（与 --out 同口径）：空名永远非法，
+                        // fail-fast 优于运行时 Y-R9000 "entry `` not found"。
+                        let v = &s["--entry=".len()..];
+                        if v.is_empty() {
+                            eprintln!("error: --entry expects a function name");
+                            return ExitCode::from(2);
+                        }
+                        entry = Some(v.to_string());
                     }
                     // 停机安全三旋钮（决策 71 CLI 面）：默认写死 1 亿指令 +
                     // 64 MiB 堆对「跑别人给的脚本」场景不可调——收紧（沙箱化）
@@ -183,10 +199,12 @@ fn print_help() {
 }
 
 /// `yoru run` 停机安全三旋钮（决策 71 的 CLI 面）：None = 沿用 VM 默认。
+/// 数值域统一 u64：负值在解析层即拒绝（exit 2），不流入限额逻辑——
+/// 负 max_heap_bytes 会让一切分配静默失败的荒谬状态无从产生。
 #[derive(Default)]
 struct RunBounds {
     max_instructions: Option<u64>,
-    heap_mb: Option<i64>,
+    heap_mb: Option<u64>,
     deadline_ms: Option<u64>,
 }
 
@@ -361,7 +379,9 @@ fn run(
         limits.max_instructions = n;
     }
     if let Some(mb) = bounds.heap_mb {
-        limits.max_heap_bytes = mb.saturating_mul(1024 * 1024);
+        // u64 → i64 饱和转换：巨值钳到 i64::MAX·1MiB 饱和 = 实际无限，语义保真
+        let mib = i64::try_from(mb).unwrap_or(i64::MAX);
+        limits.max_heap_bytes = mib.saturating_mul(1024 * 1024);
     }
     vm.set_limits(limits);
     if let Some(ms) = bounds.deadline_ms {

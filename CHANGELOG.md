@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **CLI flag 输入域收紧（2026-10-13，质量审计）**：`--heap-mb` 数值域改 u64——负值原会流入限额逻辑产生「一切分配静默失败」的荒谬状态，现解析层即拒绝（exit 2）；巨值饱和转换（实际无限，语义保真）。`--entry=`/`--out=` 空值解析层拒绝（空名永远非法、空路径只会产出不可读写错误）——fail-fast 优于运行时结构化错误。`.yoruc` 构建产物入 `.gitignore`（可由 build 再生，不入库）。
+
 ### Added
 - **`yoru run` LBC0 直载（2026-10-13，P0a④，25 号 §A）**：`yoru run foo.yoruc` 跳过前端全链（parse/typeck/lower）直入 VM——`build` + `run` 构成产物分发闭环。真实性/合法性双闸：deserialize 把关 magic/version/CRC32，verify_module 坚持 validate-before-use（不豁免自产字节码）；坏产物结构化拒绝 exit 1。`check`/`build` 误入 `.yoruc` 给诚实指引（替代 UTF-8 解码噪音）。e2e：sort 与 std-import 模块直载输出逐位一致；`--entry`/`--host`/`--stats`/停机三旋钮全部可用。启动实测：tiny min 36.6→28.9ms（-21%，地板 = 进程孵化 ~28ms）；原「32→16ms」预测证伪（小模块前端仅 0-5ms），真实收益面在嵌入进程内加载与大模块分发。
 

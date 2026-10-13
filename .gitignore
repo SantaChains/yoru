@@ -19,3 +19,6 @@ Thumbs.db
 
 # V0 fuzz artifacts（crash 归档不入库——崩例固化前先人工复核最小化）
 fuzz-artifacts/
+
+# LBC0 build artifacts（产物可由 build 再生，不入库）
+*.yoruc
