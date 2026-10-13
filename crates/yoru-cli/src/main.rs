@@ -102,13 +102,23 @@ fn main() -> ExitCode {
                 fmt(&files, write_in_place, check_only)
             }
         }
+        Some("doctest") => {
+            let paths: Vec<std::path::PathBuf> =
+                args[2..].iter().map(std::path::PathBuf::from).collect();
+            if paths.is_empty() {
+                eprintln!("usage: yoru doctest <file.md|.yoru|dir>...");
+                ExitCode::from(2)
+            } else {
+                doctest(&paths)
+            }
+        }
         Some("--version") | Some("-V") => {
             println!("yoru 0.1.0 (frontend+typeck+bytecode+vm, spec 19 v2, LBC0 1.0)");
             ExitCode::SUCCESS
         }
         _ => {
             eprintln!(
-                "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] <file.yoru>      compile + execute via T1 VM\n  yoru fmt [--check | -w] <file.yoru>...              format source (stdout | in-place | check)\n  yoru --version"
+                "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] <file.yoru>      compile + execute via T1 VM\n  yoru fmt [--check | -w] <file.yoru>...              format source (stdout | in-place | check)\n  yoru doctest <file.md|.yoru|dir>...                 extract and verify embedded code blocks\n  yoru --version"
             );
             ExitCode::from(2)
         }
@@ -135,7 +145,9 @@ fn fmt(files: &[String], write_in_place: bool, check_only: bool) -> ExitCode {
                 for d in &diags {
                     print_diagnostic(&src, d);
                 }
-                eprintln!("error: {path}: not formatted (parse error) — fmt only handles valid files");
+                eprintln!(
+                    "error: {path}: not formatted (parse error) — fmt only handles valid files"
+                );
                 failed += 1;
                 continue;
             }
@@ -352,4 +364,31 @@ fn line_col(src: &str, offset: usize) -> (usize, usize) {
         .next()
         .map_or(1, |s| s.chars().count() + 1);
     (line, col)
+}
+
+/// doctest（D 线，28 号 §2.3）：提取 markdown ` ```yoru ` 围栏块与 `.yoru`
+/// `///` 文档注释内嵌块，逐块执行断言。提取与执行语义全在 yoru-doctest
+/// crate（lib 层可测试复用），CLI 层薄封装：报告 + clig.dev 退出码。
+fn doctest(paths: &[std::path::PathBuf]) -> ExitCode {
+    match yoru_doctest::check_paths(paths) {
+        Ok(report) => {
+            if report.failed == 0 {
+                println!("doctest: {} passed", report.passed);
+                ExitCode::SUCCESS
+            } else {
+                for (label, reason) in &report.failures {
+                    println!("FAIL {label}: {reason}");
+                }
+                println!(
+                    "doctest: {} passed, {} failed",
+                    report.passed, report.failed
+                );
+                ExitCode::FAILURE
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }

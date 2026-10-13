@@ -11,6 +11,7 @@ yoru-typeck = { path = "../yoru-typeck" }
 yoru-bytecode = { path = "../yoru-bytecode" }
 yoru-vm = { path = "../yoru-vm" }
 yoru-fmt = { path = "../yoru-fmt" }
+yoru-doctest = { path = "../yoru-doctest" }
 
 [[bin]]
 name = "yoru"

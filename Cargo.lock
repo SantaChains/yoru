@@ -104,7 +104,18 @@ name = "yoru-cli"
 version = "0.1.0"
 dependencies = [
  "yoru-bytecode",
+ "yoru-doctest",
  "yoru-fmt",
+ "yoru-syntax",
+ "yoru-typeck",
+ "yoru-vm",
+]
+
+[[package]]
+name = "yoru-doctest"
+version = "0.1.0"
+dependencies = [
+ "yoru-bytecode",
  "yoru-syntax",
  "yoru-typeck",
  "yoru-vm",

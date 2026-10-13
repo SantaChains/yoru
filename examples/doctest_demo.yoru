@@ -1,0 +1,27 @@
+//! doctest 演示：`///` 文档注释内嵌 ```yoru 块（spec 19.1 既定「/// = doctest 源」，
+//! 决策 83 词法一等保留）。`yoru doctest <file.yoru>` 提取并逐位验证。
+//!
+//! 块自包含约定：提取出的块是独立编译单元，不继承宿主文件的其它声明——
+//! 示例中被引用的函数须在块内定义（与 markdown 围栏块同口径）。
+
+/// 加倍一个整数。
+///
+/// ```yoru
+/// fn double(x: int) -> int {
+///     return x * 2
+/// }
+///
+/// fn main() -> int {
+///     print(double(21))
+///     return 0
+/// }
+/// // => 42
+/// ```
+pub fn double(x: int) -> int {
+    return x * 2
+}
+
+fn main() -> int {
+    print(double(21))
+    return 0
+}

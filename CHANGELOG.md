@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- **yoru-doctest crate + `yoru doctest` CLI + CI job（2026-10-13，D 线 doctest，28 号 §2.3 / 30 号序 7）**：文档示例机械化验证——C8 规格漂移的 CI 防线（文档示例坏了 CI 红，而非事后人工登记）。双语料共用同一提取器：markdown ` ```yoru ` 围栏块 + `.yoru` 源 `///` 文档注释内嵌块（spec 19.1「/// = doctest 源」兑现，决策 83 词法一等保留后零成本）。断言尾注：`// =>` 期望 print 输出逐位比对（连续多行 = 多行期望）；`// error:` 诊断码集合精确比对（check 块，只 parse+typeck 不执行）；无尾注 = 全链契约（typeck + lower + verify + run(main)）。块为完整编译单元。CI doctest job 第二步兑现 examples/math README §0 运行契约（11 篇全部 `yoru run` 通过）。范围修正：原定设计文档 01/06/19 内嵌示例——经盘点无可执行围栏且设计目录在仓库外 CI 不可达，改为仓库内播种（README 3 块 + examples/doctest_demo.yoru），设计文档侧标注 ` ```yoru ` 后可自动纳入。V1 最小对拍（examples 11 篇 typeck ok ⟺ lower ok）随 tests 落地；V2 语法驱动语料生成顺延（30 号 §6）。
 - **yoru-fuzz crate（2026-10-13，V 线 V0 crash-fuzz，30 号 §6.1）**：全链 panic-free 契约机械化验证——`lex → parse → typeck → lower → run(有限步)` 五阶段 catch_unwind，token 段级语法变异（字典注入/删除/复制/换行扰动，强度分布化）+ 深度守卫 + 确定性 RNG（`(seed, case_id)` 可重放）。run 有限步由 VM 资源三限承接（零 VM 扩展）。验收：10 万 case panic-free（62s）；smoke 800 case 常驻回归。libFuzzer 不支持 Windows，自研 harness 可薄包装为未来 cargo-fuzz target。
 - **`get` / `get_or` 内建（2026-10-13，28 号 R 线，27 号 §3.2 strict 取键）**：`get(m, k)` 命中返回值、缺键返回 None（`V?`），`get_or(m, k, d)` 缺键返回缺省值——缺键处理惯用法断层（get 侧）关闭。`map.get` 拼写与列表 map 函数撞名（决策 77 单一命名空间），按 keys/values 先例取裸名。类型闸实证：`int?` 赋 `int` 编译期拦截、键类型泛型冲突拦截。
 - **`yoru fmt` CLI（2026-10-13，F 线 F2）**：gofmt 风格三形态——默认 stdout（管道组合）、`-w` 原地写入、`--check` 校验（有差异 exit 1，CI 可直接挂）。语义不变性以最强形态验收：examples 11 篇格式化前后 `yoru run` 输出逐位一致（diff 执行结果而非 diff 文本）；解析错误文件诚实拒绝（fmt 只对合法文件负责）。
@@ -13,6 +14,7 @@
 - **30 号战略定夺（2026-10-13，文档）**：主轴转工具链（F→R→D→L），语言层只清 Critical 实现债穿插推进；D-03（struct 算术 typeck 放行→VM 崩）定夺 **fail-fast** 方向；新登记 **V 线语义差分测试基建**（cargo-fuzz crash-fuzz + 双模式对拍）。设计文档侧更新，无代码变更。
 
 ### Fixed
+- **遗留对账测试编译错误（2026-10-13，doctest 批次盘点时发现）**：`builtin_fns_mirror_locked` 测试仍引用 BUILTIN_FNS 派生化前的旧符号（31b8908 改造漏同步，workspace 全量测试实际红）——该测试在派生化后已退化为同义反复（镜像==注册表由构造保证），予以撤销并留痕；真正的对账面在 VM 侧 `registry_dispatch_reconciled`（继续承担漏注册/幽灵名防线）。
 - **struct 算术 fail-fast（2026-10-13，D-03 Critical，30 号定夺）**：已 `impl Add/Sub/Mul/Div` 的 struct 算术不再「typeck 放行 → 运行期 Y-R9007 崩」——协议算术执行管线未接入（随泛型批次）前，`check_arith` 对 Named 同型算术一律编译期拒绝（Y-T0022），诊断区分「已 impl 但管线未实现」与「未 impl」两情形并给出自由函数建议。strict 健全承诺（静态通过则运行期成立）恢复完整。
 - **lower 内建名单漂移根修（2026-10-13，get/get_or 落地时实证）**：`BUILTIN_FNS` 手写 frozen 镜像（注释声称有 `registry_mirror_locked` 对账测试，实际不存在）与注册表脱节——新增内建裸名调用撞 Y-T0913。改为从 `yoru-stdlib` 注册表派生（LazyLock HashSet，单一事实源构造保证一致），对账测试不再需要。
 - **嵌套 lambda 祖父捕获崩溃（2026-10-13，D-24 Critical 根修）**：内层 lambda 捕获非直接父级的变量不再报 `Y-I9004`——根因是 `lower_lambda` 以 clone 继承捕获层，内层经 resolve_capture 登记进中间层的传递 upvalue 条目随克隆体在恢复外层状态时丢失（中间层 `proto.upvalues` 落空）；改 move 语义后穿透捕获正确。for 循环变量作祖父捕获时每轮按值快照（决策 31）。回归测试 +2，examples 11/11，全仓 160 测试全绿。

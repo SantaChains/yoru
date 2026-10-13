@@ -13,6 +13,38 @@ yoru check hello.yoru      # 类型/语义检查，结构化诊断（Y-xxxx 错�
 cargo run -p yoru-cli --example embed_host   # 完整嵌入示例（typeck 签名面 + VM 闭包 + Rust 调脚本）
 ```
 
+## 语言速览（doctest 契约块）
+
+以下 ` ```yoru ` 块由 `yoru doctest`（28 号 §2.3，C8 防线）在 CI 中**逐位执行验证**：
+`// =>` 行是期望 print 输出，`// error:` 行断言诊断码集合——文档示例坏了 CI 红。
+
+```yoru
+fn main() -> int {
+    let x = 21
+    print(x * 2)
+    return 0
+}
+// => 42
+```
+
+```yoru
+fn main() -> int {
+    let xs = [3, 1, 2]
+    print(len(xs))
+    return 0
+}
+// => 3
+```
+
+check 块只验诊断、不执行（码集精确比对，写全防漂移）：
+
+```yoru
+fn broken() {
+    let x: int = "s"
+}
+// error: Y-T0002
+```
+
 ## 仓库地图
 
 | 路径 | 内容 |
@@ -23,6 +55,7 @@ cargo run -p yoru-cli --example embed_host   # 完整嵌入示例（typeck 签�
 | `crates/yoru-vm` | 栈式 VM（资源三限 + 中断 + 观测） |
 | `crates/yoru-ffi` / `yoru-stdlib` | 宿主桥与标准库（阶段 4） |
 | `crates/yoru-cli` | `yoru` 命令行入口；`examples/embed_host.rs` = 嵌入示例 |
+| `crates/yoru-fmt` / `yoru-fuzz` / `yoru-doctest` | 工具链：formatter（F 线）/ crash-fuzz（V0）/ doctest（D 线，28 号 §2.3） |
 | `L语言设计/`（仓库外同级目录） | 设计文档体系 00-22 号（决策记录 11 号、路线图 20 号） |
 
 ## 文档排版硬规则（21 号 §7）

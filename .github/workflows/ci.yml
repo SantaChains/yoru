@@ -29,6 +29,20 @@ jobs:
           toolchain: "1.85.0"
       - run: cargo check --workspace
 
+  # D 线 doctest（28 号 §2.3）：文档示例坏了 CI 红——C8 规格漂移的机械化防线。
+  # 语料：README / examples 下 markdown ```yoru 块 + .yoru 源 /// 文档注释内嵌块。
+  # 第二步兑现 examples/math README §0 的运行契约：11 篇全部 yoru run 通过。
+  doctest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build -p yoru-cli
+      - name: embedded code blocks (markdown fences + doc comments)
+        run: cargo run -q -p yoru-cli -- doctest README.md examples
+      - name: examples/math run contract (README §0)
+        run: for f in examples/math/*.yoru; do cargo run -q -p yoru-cli -- run "$f" > /dev/null || exit 1; done
+
   # 决策 63：CI 三件套含 fuzz-smoke；fuzz crate 于阶段 6 落地，
   # 此 job 在 fuzz/ 目录存在前自动跳过（hashFiles 为空即 skip）。
   fuzz-smoke:

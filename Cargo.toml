@@ -10,6 +10,7 @@ members = [
     "crates/yoru-cli",
     "crates/yoru-fmt",
     "crates/yoru-fuzz",
+    "crates/yoru-doctest",
 ]
 
 [workspace.package]
