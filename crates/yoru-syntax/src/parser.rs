@@ -1342,7 +1342,18 @@ impl Parser {
             TokenKind::Try => {
                 self.bump();
                 let operand = self.parse_unary();
-                ExprKind::Try(Box::new(operand))
+                // 决策 87：`try e catch { 臂 }`（可捕获失败通道）；`catch` 须
+                // 与 try 体同行（唯一形式——跨行会与表达式延续文法歧义）
+                if self.at(&TokenKind::Catch) {
+                    self.bump();
+                    let arms = self.parse_match_arms();
+                    ExprKind::TryCatch {
+                        inner: Box::new(operand),
+                        arms,
+                    }
+                } else {
+                    ExprKind::Try(Box::new(operand))
+                }
             }
             TokenKind::Await => {
                 self.bump();
@@ -1609,16 +1620,27 @@ impl Parser {
         let start = self.peek().span;
         self.bump(); // match
         let scrutinee = self.parse_cond();
+        let arms = self.parse_match_arms();
+        let span = start.merge(self.peek().span);
+        Expr {
+            span,
+            kind: ExprKind::Match {
+                scrutinee: Box::new(scrutinee),
+                arms,
+            },
+        }
+    }
+
+    /// match/catch 共用的臂块：`{ 臂 }`（臂 = pattern `->` body，换行/尾逗号分隔）。
+    /// `{` 缺失返回空臂（错误恢复：由 typeck 穷尽性检查兜住）。
+    fn parse_match_arms(&mut self) -> Vec<MatchArm> {
+        let mut arms = Vec::new();
         if self
             .expect(&TokenKind::LBrace, "`{` to open match arms")
             .is_err()
         {
-            return Expr {
-                span: start,
-                kind: ExprKind::Nil,
-            };
+            return arms;
         }
-        let mut arms = Vec::new();
         loop {
             self.skip_newlines();
             if self.eat(&TokenKind::RBrace) {
@@ -1652,9 +1674,12 @@ impl Parser {
                 body,
                 span: astart.merge(self.peek().span),
             });
-            // arm 分隔：换行（行尾 `|`/运算符延续由 lexer 处理；此处宽松接受尾逗号）
-            self.eat(&TokenKind::Comma);
-            if !self.eat(&TokenKind::Newline) && !self.at(&TokenKind::RBrace) {
+            // arm 分隔：换行或逗号（行尾 `|`/运算符延续由 lexer 处理）。词法层
+            // 行尾逗号抑制换行 token（多行 list/map 延续规则），故逗号后跳过
+            // 换行即视为分隔完成；无逗号则要求换行。
+            if self.eat(&TokenKind::Comma) {
+                self.skip_newlines();
+            } else if !self.eat(&TokenKind::Newline) && !self.at(&TokenKind::RBrace) {
                 let t = self.peek().clone();
                 self.diagnostics.push(Diagnostic::error(
                     format!(
@@ -1666,14 +1691,7 @@ impl Parser {
                 self.recover_stmt();
             }
         }
-        let span = start.merge(self.peek().span);
-        Expr {
-            span,
-            kind: ExprKind::Match {
-                scrutinee: Box::new(scrutinee),
-                arms,
-            },
-        }
+        arms
     }
 
     /// `pattern ::= literal | identifier | variant_pattern | "_"`（无解构模式）。

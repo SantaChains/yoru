@@ -1129,6 +1129,18 @@ impl<'e> Checker<'e> {
                     }
                 }
             }
+            ExprKind::TryCatch { inner, arms } => {
+                // 决策 87 阶段①：throw 通道的本地捕获。错误值类型任意
+                // （throw 可抛任何值）→ 臂模式对 Ty::Any 检查、必须含兜底臂
+                // （check_arms 内 Any 非穷尽路径天然强制）；臂结果须与 try 体
+                // 类型统一（唯一表达式类型，无 union）。
+                let t = self.check_expr(inner, None);
+                let u = self.check_arms(&Ty::Any, arms, Some(&t), "catch", e.span);
+                if !u.same(&t) {
+                    self.err(self.mismatch(t.clone(), u, e.span));
+                }
+                t
+            }
             ExprKind::Await(operand) => {
                 let t = self.check_expr(operand, None);
                 match t {
@@ -1437,19 +1449,33 @@ impl<'e> Checker<'e> {
         expected: Option<&Ty>,
     ) -> Ty {
         let st = self.check_expr(scrutinee, None);
+        self.check_arms(&st, arms, expected, "match", scrutinee.span)
+    }
+
+    /// match/catch 共用的臂检查（决策 87）：逐臂 check_pattern → 绑定入作用域
+    /// → 臂体类型统一；穷尽性 = 兜底臂或 tag/Result 全变体覆盖。
+    /// `what` 仅用于错误文案（"match" / "catch"）。
+    fn check_arms(
+        &mut self,
+        st: &Ty,
+        arms: &[ast::MatchArm],
+        expected: Option<&Ty>,
+        what: &str,
+        st_span: Span,
+    ) -> Ty {
         let mut result: Option<Ty> = None;
         let mut covered: Vec<String> = Vec::new();
         let mut catch_all = false;
         for arm in arms {
             self.scopes.push(Scope::default());
-            let binds = self.check_pattern(&arm.pattern, &st, arm.span);
+            let binds = self.check_pattern(&arm.pattern, st, arm.span);
             match &arm.pattern {
                 Pattern::Wildcard => catch_all = true,
                 Pattern::Bind(n) => {
                     if n == "_" {
                         catch_all = true;
                     } else if let Some((owner, payload)) = self.decls.variants.get(n) {
-                        let is_scrut_variant = matches!(&st, Ty::Named { name, .. } if name == owner)
+                        let is_scrut_variant = matches!(st, Ty::Named { name, .. } if name == owner)
                             && payload.is_none();
                         if is_scrut_variant {
                             covered.push(n.clone());
@@ -1485,9 +1511,9 @@ impl<'e> Checker<'e> {
             }
             self.pop_scope();
         }
-        // 穷尽性（决策：match 穷尽处理）
+        // 穷尽性（决策：match 穷尽处理；catch 的错误值类型任意 → 必有兜底臂）
         let exhaustive = catch_all
-            || match &st {
+            || match st {
                 Ty::Named { name, .. } => match self.decls.types.get(name) {
                     Some(TypeKind::Tag { variants, .. }) => {
                         variants.iter().all(|(vn, _)| covered.contains(vn))
@@ -1505,8 +1531,8 @@ impl<'e> Checker<'e> {
                 d(
                     "Y-T0015",
                     Severity::Error,
-                    "match 未穷尽所有情况（决策：穷尽处理）",
-                    scrutinee.span,
+                    format!("{what} 未穷尽所有情况（决策：穷尽处理）"),
+                    st_span,
                 )
                 .with_suggestion("补齐缺失变体分支，或加兜底分支（绑定名 / _）"),
             );
@@ -1515,11 +1541,14 @@ impl<'e> Checker<'e> {
     }
 
     fn check_pattern(&mut self, pat: &Pattern, scrut: &Ty, span: Span) -> Vec<(String, Ty)> {
+        // Ty::Any（catch 错误值类型，决策 87）：throw 可抛任意值，字面量模式
+        // 恒可能命中；变体模式在 Variant 臂单独放行（只查存在性）。
+        let any = scrut == &Ty::Any;
         match pat {
-            Pattern::Int(_) if scrut == &Ty::Int => vec![],
-            Pattern::Float(_) if scrut == &Ty::Float => vec![],
-            Pattern::Bool(_) if scrut == &Ty::Bool => vec![],
-            Pattern::Str(_) if scrut == &Ty::Str => vec![],
+            Pattern::Int(_) if scrut == &Ty::Int || any => vec![],
+            Pattern::Float(_) if scrut == &Ty::Float || any => vec![],
+            Pattern::Bool(_) if scrut == &Ty::Bool || any => vec![],
+            Pattern::Str(_) if scrut == &Ty::Str || any => vec![],
             Pattern::Nil => {
                 if !matches!(scrut, Ty::Opt(_)) {
                     self.err(d(
@@ -1562,6 +1591,9 @@ impl<'e> Checker<'e> {
                     }
                 }
                 let (owner, tag_args) = match scrut {
+                    // Ty::Any（catch 错误值，决策 87）：owner 未知——变体只查
+                    // 存在性，载荷类型按声明原样绑定（无 tag 实参代换）。
+                    Ty::Any => (String::new(), Vec::new()),
                     Ty::Named { name, args } => (name.clone(), args.clone()),
                     other => {
                         self.err(d(
@@ -1574,7 +1606,7 @@ impl<'e> Checker<'e> {
                     }
                 };
                 match self.decls.variants.get(name).cloned() {
-                    Some((tag, pty)) if tag == owner => {
+                    Some((tag, pty)) if tag == owner || owner.is_empty() => {
                         match (pty, payload) {
                             (Some(pt), Some(Payload::Bind(binder))) => {
                                 // 载荷类型以 tag 实参代换（Tree[int] → Node2[int]）
@@ -1611,12 +1643,12 @@ impl<'e> Checker<'e> {
                         }
                     }
                     _ => {
-                        self.err(d(
-                            "Y-T0002",
-                            Severity::Error,
-                            format!("`{owner}` 没有变体 `{name}`"),
-                            span,
-                        ));
+                        let msg = if owner.is_empty() {
+                            format!("未知变体 `{name}`")
+                        } else {
+                            format!("`{owner}` 没有变体 `{name}`")
+                        };
+                        self.err(d("Y-T0002", Severity::Error, msg, span));
                         vec![]
                     }
                 }

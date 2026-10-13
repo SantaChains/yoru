@@ -928,6 +928,21 @@ impl Lowerer {
                 self.emit_arg(Opcode::LoadLocal, t as u32);
                 self.emit_op(Opcode::Unwrap);
             }
+            ast::ExprKind::TryCatch { inner, arms } => {
+                // 决策 87 阶段①：CatchPush 记 handler（栈基线 + catch 块相对
+                // 偏移）；成功路径 CatchPop 摘除；Raise 命中 handler 时截栈、
+                // 压错误值、跳 catch 块（臂分发复用 match 机制，错误值存 $catch）。
+                let push_idx = self.emit_arg(Opcode::CatchPush, 0);
+                self.lower_expr(inner);
+                self.emit_op(Opcode::CatchPop);
+                let jend = self.emit_op(Opcode::Jmp);
+                let catch_ip = self.code_len();
+                self.patch_jump(push_idx, catch_ip);
+                let t = self.declare_local("$catch");
+                self.emit_arg(Opcode::StoreLocal, t as u32);
+                self.lower_match_arms(t, arms);
+                self.patch_jump(jend, self.code_len());
+            }
             ast::ExprKind::Await(inner) => {
                 self.lower_expr(inner);
                 self.emit_op(Opcode::Await);
@@ -1219,6 +1234,13 @@ impl Lowerer {
         self.lower_expr(scrutinee);
         let t = self.declare_local("$match");
         self.emit_arg(Opcode::StoreLocal, t as u32);
+        self.lower_match_arms(t, arms);
+    }
+
+    /// match/catch 共用的臂分发（决策 87）：scrutinee 值已存入局部槽 `t`，
+    /// 逐臂测试 → body → Jmp 汇合；无兜底臂时补 Nil+Raise 运行期陷阱
+    /// （穷尽性由 typeck 保证，决策 20/87）。
+    fn lower_match_arms(&mut self, t: u16, arms: &[ast::MatchArm]) {
         let mut ends: Vec<usize> = Vec::new();
         let mut handled_catchall = false;
         for arm in arms {

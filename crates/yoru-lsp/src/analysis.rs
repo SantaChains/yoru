@@ -244,8 +244,8 @@ fn type_body_str(b: &TypeBody) -> String {
 
 const KEYWORDS: &[&str] = &[
     "fn", "let", "mut", "return", "if", "else", "for", "in", "while", "match", "struct", "tag",
-    "type", "protocol", "impl", "const", "import", "as", "try", "throw", "await", "distinct",
-    "pub", "break", "continue", "true", "false", "nil",
+    "type", "protocol", "impl", "const", "import", "as", "try", "catch", "throw", "await",
+    "distinct", "pub", "break", "continue", "true", "false", "nil",
 ];
 
 /// 在 `offset` 处生成补全项：注册表 + 用户声明 + 关键字；识别 `module.` 上下文。

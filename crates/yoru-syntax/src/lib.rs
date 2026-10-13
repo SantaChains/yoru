@@ -57,6 +57,42 @@ mod tests {
     }
 
     #[test]
+    fn try_catch_parses_arms() {
+        // 决策 87：`try e catch { 臂 }`——臂复用 match 臂文法
+        let src = "fn f() {\ntry g() catch {\n    NetErr(e) -> 0,\n    _ -> 0 - 1\n}\n}\n";
+        let program = parse_source(src).expect("parse");
+        assert_eq!(count_expr_kind(&program), 1, "应产出 TryCatch 节点");
+    }
+
+    #[test]
+    fn bare_try_unchanged() {
+        // 裸 try（决策 54 双传播）不受 catch 引入影响
+        let src = "fn f() {\ntry g()\n}\n";
+        let program = parse_source(src).expect("parse");
+        assert_eq!(count_expr_kind(&program), 1, "裸 try 应产出 Try 节点");
+    }
+
+    /// 统计顶层 fn 块内表达式语句中的 Try/TryCatch 节点数。
+    fn count_expr_kind(program: &Program) -> usize {
+        let mut found = 0;
+        for d in &program.decls {
+            if let DeclKind::Fn(f) = &d.kind {
+                let ast::FnBody::Block(b) = &f.body else {
+                    continue;
+                };
+                for s in &b.stmts {
+                    if let StmtKind::Expr(e) = &s.kind {
+                        if matches!(e.kind, ExprKind::Try(_) | ExprKind::TryCatch { .. }) {
+                            found += 1;
+                        }
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
     fn line_continues_after_binary_op() {
         let src = "fn f() {\nlet x = 1 +\n    2\n}\n";
         assert!(parse_source(src).is_ok(), "{:?}", parse_source(src));

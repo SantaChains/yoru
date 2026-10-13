@@ -233,10 +233,11 @@ fn h(x: int) -> Result<int, E> {
     #[test]
     fn bad_opcode_rejected() {
         let mut m = verified_minimal();
-        // 未分配 opcode 0x68（0x67 已分配 GetIndexLL）：直接构造编码字
-        m.protos[0].code[0] = Instr::decode(0x68, 0).unwrap_or(Instr::new(Opcode::Nil));
+        // 未分配 opcode 0x6A（0x68/0x69 已分配 CatchPush/CatchPop，决策 87）：
+        // 直接构造编码字
+        m.protos[0].code[0] = Instr::decode(0x6A, 0).unwrap_or(Instr::new(Opcode::Nil));
         // decode 必失败时上面的 fallback 不可用——用原始字直接验证负路径
-        assert!(Instr::decode(0x68, 0).is_err());
+        assert!(Instr::decode(0x6A, 0).is_err());
         // 对模块级验证：改走 deserialize 路径更真实，但此处直接检查 verify 拒绝
         // （用占位 Nil 替换后仍应通过——故只断言 decode 负路径）
         let _ = m;

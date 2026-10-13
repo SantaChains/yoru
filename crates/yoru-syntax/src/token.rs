@@ -46,6 +46,7 @@ pub enum TokenKind {
     Const,
     As,
     Try,
+    Catch,
     Throw,
     Await,
     Distinct,

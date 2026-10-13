@@ -186,6 +186,28 @@ mod tests {
         assert!(bad.iter().any(|d| d.code.as_deref() == Some("Y-T0002")));
     }
 
+    // ===== 决策 87：try-catch 可捕获失败通道 =====
+
+    #[test]
+    fn try_catch_well_typed() {
+        let src = "tag NetErr = Fail(string)\npub fn main() -> int {\n    return try (10 / 2) catch {\n        Fail(e) -> 0 - 1,\n        _ -> 0 - 2\n    }\n}\n";
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
+    }
+
+    #[test]
+    fn try_catch_requires_catchall() {
+        // 错误值类型任意（throw 可抛任何值）→ 无兜底臂不可穷尽（决策 87）
+        let src = "tag NetErr = Fail(string)\npub fn main() -> int {\n    return try (10 / 2) catch {\n        Fail(e) -> 0 - 1\n    }\n}\n";
+        assert!(codes(&errors(src)).contains(&"Y-T0015".to_string()));
+    }
+
+    #[test]
+    fn try_catch_arm_type_must_unify() {
+        // 臂结果须与 try 体类型统一（唯一表达式类型，无 union）
+        let src = "pub fn main() -> int {\n    return try (10 / 2) catch {\n        _ -> \"x\"\n    }\n}\n";
+        assert!(!errors(src).is_empty(), "臂类型不一致应报错");
+    }
+
     // ===== 决策 26：int/float 严格 as =====
 
     #[test]

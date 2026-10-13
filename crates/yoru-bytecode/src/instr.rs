@@ -104,6 +104,11 @@ pub enum Opcode {
     TagNew = 0x79,
     NewRange = 0x7A,
     Slice = 0x7B,
+    // ---- 可捕获失败通道（决策 87：方案 A throws 单通道阶段①）----
+    // CatchPush arg = catch 块入口 pc；Raise 先查本帧 handler 栈，命中则
+    // 截栈压错误值跳转 catch 块，未命中沿调用链上抛（宿主边界语义不变）。
+    CatchPush = 0x68,
+    CatchPop = 0x69,
     // ---- 融合条件跳转（P0a③「Cmp+JumpIf」超指令，25 号 §A 直方图驱动）----
     // 语义 = `Xx; JmpIfNot target` 融合：弹 (b, a)，`!(a cmp b)` 成立则跳转。
     // 比较语义与独立指令逐位一致（含 Y-R9007/Y-R9011 错误面）；lower 窥孔
@@ -185,6 +190,8 @@ impl Opcode {
             0x79 => Opcode::TagNew,
             0x7A => Opcode::NewRange,
             0x7B => Opcode::Slice,
+            0x68 => Opcode::CatchPush,
+            0x69 => Opcode::CatchPop,
             0x7C => Opcode::JmpIfNotLt,
             0x7D => Opcode::JmpIfNotLe,
             0x7E => Opcode::JmpIfNotGt,
@@ -218,7 +225,8 @@ impl Opcode {
             | Opcode::IsTag
             | Opcode::Payload
             | Opcode::Convert
-            | Opcode::TagNew => OperandKind::U24,
+            | Opcode::TagNew
+            | Opcode::CatchPush => OperandKind::U24,
             Opcode::Jmp | Opcode::JmpIf | Opcode::JmpIfNot => OperandKind::S24,
             _ => OperandKind::None,
         }
@@ -301,9 +309,12 @@ mod tests {
 
     #[test]
     fn reserved_opcode_rejected() {
-        // 0x67 已分配 GetIndexLL（决策 80 族对称，P0a③）；0x68-0x6F 仍为空洞
+        // 0x67 已分配 GetIndexLL（决策 80 族对称，P0a③）；0x68/0x69 已分配
+        // CatchPush/CatchPop（决策 87）；0x6A-0x6F 仍为空洞
         assert!(Instr::decode(0x67, 0).is_ok());
-        assert!(Instr::decode(0x68, 0).is_err());
+        assert!(Instr::decode(0x68, 0).is_ok());
+        assert!(Instr::decode(0x69, 0).is_ok());
+        assert!(Instr::decode(0x6A, 0).is_err());
         assert!(Instr::decode(0xC0, 0).is_err());
     }
 

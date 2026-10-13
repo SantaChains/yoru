@@ -93,6 +93,17 @@ struct Frame {
     locals: Vec<Value>,
     /// Return 时栈截断基线（调用点弹参后的深度）
     stack_base: usize,
+    /// catch 处理器栈（决策 87，LIFO）。Raise / 跨帧 Raised 上抛先查本帧
+    /// 栈顶：命中则截栈压错误值跳 catch 块；未命中沿调用链上抛。
+    handlers: Vec<Handler>,
+}
+
+/// 单个 catch 处理器：`stack_depth` = CatchPush 执行时的值栈深度（catch 时
+/// 截断基线，丢弃 try 体部分求值的中间值）；`catch_ip` = catch 块绝对 pc。
+#[derive(Debug, Clone, Copy)]
+struct Handler {
+    stack_depth: usize,
+    catch_ip: usize,
 }
 
 /// 模块实例（决策 69）：模块 + import 槽值 + 宿主函数表。多实例互不可见。
@@ -500,6 +511,7 @@ impl Vm {
                     pc: 0,
                     locals,
                     stack_base: self.stack.len(),
+                    handlers: Vec::new(),
                 });
                 self.stats.max_call_depth = self.stats.max_call_depth.max(self.frames.len());
                 self.exec()
@@ -1101,8 +1113,25 @@ impl Vm {
                 // TAILCALL 暂以普通调用执行（正确性优先，优化留 JIT 前）。
                 let callee = self.pop();
                 let args = self.pop_n(instr.arg as usize)?;
-                let v = self.call_value(callee, args)?;
-                self.push(v);
+                let frame_depth = self.frames.len();
+                match self.call_value(callee, args) {
+                    Ok(v) => self.push(v),
+                    // 决策 87：被调帧抛出的失败值，在本帧 handler 栈顶被截获——
+                    // 截掉已退出的被调帧，截栈压错误值，跳 catch 块继续执行。
+                    // 仅拦 Raised（throw 通道）；Runtime/Limit/Interrupted
+                    // 不可捕获（决策 71 / 32 号 §32.5.3）。
+                    Err(VmError::Raised(ev)) => {
+                        self.frames.truncate(frame_depth);
+                        if let Some(h) = self.frames.last_mut().expect("frame").handlers.pop() {
+                            self.stack.truncate(h.stack_depth);
+                            self.stack.push(ev);
+                            self.frames.last_mut().expect("frame").pc = h.catch_ip;
+                        } else {
+                            return Err(VmError::Raised(ev));
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             Opcode::CallHost => {
                 // 直接编码的宿主调用（决策 76）：与 `Const(Str(名))` + Call
@@ -1119,8 +1148,22 @@ impl Vm {
                         ));
                     }
                 };
-                let v = self.call_host(&name, &args)?;
-                self.push(v);
+                let frame_depth = self.frames.len();
+                match self.call_host(&name, &args) {
+                    Ok(v) => self.push(v),
+                    // 决策 87：宿主函数上抛的失败值同样可被本帧 catch 截获。
+                    Err(VmError::Raised(ev)) => {
+                        self.frames.truncate(frame_depth);
+                        if let Some(h) = self.frames.last_mut().expect("frame").handlers.pop() {
+                            self.stack.truncate(h.stack_depth);
+                            self.stack.push(ev);
+                            self.frames.last_mut().expect("frame").pc = h.catch_ip;
+                        } else {
+                            return Err(VmError::Raised(ev));
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             Opcode::Return => {
                 let v = self.pop();
@@ -1197,7 +1240,31 @@ impl Vm {
             }
             Opcode::Raise => {
                 let v = self.pop();
-                return Err(VmError::Raised(v));
+                // 决策 87：先查本帧 handler 栈顶——命中则截栈压错误值跳 catch
+                // 块；未命中维持既有语义（沿调用链上抛，宿主边界可截）。
+                let f = self.frames.last_mut().expect("frame");
+                if let Some(h) = f.handlers.pop() {
+                    self.stack.truncate(h.stack_depth);
+                    self.stack.push(v);
+                    f.pc = h.catch_ip;
+                } else {
+                    return Err(VmError::Raised(v));
+                }
+            }
+            Opcode::CatchPush => {
+                // arg = catch 块相对偏移（与 Jmp 家族同 patch 机制），执行时
+                // 换算绝对 pc 存入 handler；栈基线 = 此刻深度（try 体求值前的栈）。
+                // 基准与 jump() 一致：pc 已自增，回退 1 对齐本指令地址。
+                let f = self.frames.last_mut().expect("frame");
+                let catch_ip = (f.pc as i64 - 1 + instr.sarg() as i64) as usize;
+                f.handlers.push(Handler {
+                    stack_depth: self.stack.len(),
+                    catch_ip,
+                });
+            }
+            Opcode::CatchPop => {
+                // try 体正常求值完毕，摘除 handler（早退 return 时随帧销毁）。
+                self.frames.last_mut().expect("frame").handlers.pop();
             }
 
             // ---- 阶段 2 扩展 ----
@@ -1933,6 +2000,66 @@ mod tests {
         match err {
             VmError::Raised(v) => assert_eq!(vm.format_value(&v), "MyErr#0"),
             other => panic!("expect Raised, got {other:?}"),
+        }
+    }
+
+    // ---- 决策 87：try-catch 可捕获失败通道 ----
+
+    #[test]
+    fn try_catch_catches_local_throw() {
+        // 同帧：Raise 直接命中本帧 handler
+        let src = "tag NetErr = Fail(string)\nfn deep(n: int) -> int {\n    if n < 0 {\n        throw Fail(\"neg\")\n    }\n    return n\n}\npub fn main() -> int {\n    return try deep(0 - 1) catch {\n        Fail(e) -> 0 - 1,\n        _ -> 0 - 2\n    }\n}\n";
+        assert_eq!(run_src(src).expect("run"), Value::Int(-1));
+    }
+
+    #[test]
+    fn try_catch_catches_across_frames() {
+        // 跨帧：Raised 沿调用链上抛，在 catch 所在帧的 Call 点被截获
+        let src = "tag NetErr = Fail(string)\nfn deep(n: int) -> int {\n    if n < 0 {\n        throw Fail(\"neg\")\n    }\n    return n\n}\nfn mid(n: int) -> int {\n    return deep(n)\n}\npub fn main() -> int {\n    return try mid(0 - 1) catch {\n        Fail(_) -> 7,\n        _ -> 0 - 2\n    }\n}\n";
+        assert_eq!(run_src(src).expect("run"), Value::Int(7));
+    }
+
+    #[test]
+    fn try_catch_success_value_flows() {
+        // 未抛出：try 体值直达（handler 由 CatchPop 正常摘除）
+        let src = "tag NetErr = Fail(string)\nfn deep(n: int) -> int {\n    if n < 0 {\n        throw Fail(\"neg\")\n    }\n    return n\n}\npub fn main() -> int {\n    return try deep(3) catch {\n        Fail(_) -> 0 - 1,\n        _ -> 0 - 2\n    }\n}\n";
+        assert_eq!(run_src(src).expect("run"), Value::Int(3));
+    }
+
+    #[test]
+    fn try_catch_truncates_partial_stack() {
+        // 第二实参求值中途抛出：栈上残留第一实参，catch 时按基线截断
+        let src = "tag NetErr = Fail(string)\nfn add(a: int, b: int) -> int {\n    return a + b\n}\nfn deep(n: int) -> int {\n    if n < 0 {\n        throw Fail(\"neg\")\n    }\n    return n\n}\npub fn main() -> int {\n    return try add(1, deep(0 - 1)) catch {\n        Fail(_) -> 9,\n        _ -> 0 - 2\n    }\n}\n";
+        assert_eq!(run_src(src).expect("run"), Value::Int(9));
+    }
+
+    #[test]
+    fn try_catch_nested_inner_wins() {
+        // 嵌套：内层 catch 先命中（LIFO）
+        let src = "tag NetErr = Fail(string)\nfn deep() {\n    throw Fail(\"x\")\n}\npub fn main() -> int {\n    return try (try deep() catch {\n        Fail(_) -> 0 - 1,\n        _ -> 0 - 3\n    }) catch {\n        Fail(_) -> 0 - 2,\n        _ -> 0 - 4\n    }\n}\n";
+        assert_eq!(run_src(src).expect("run"), Value::Int(-1));
+    }
+
+    #[test]
+    fn try_catch_does_not_catch_runtime_errors() {
+        // 运行时错误（Y-R 域）不可捕获——只有 throw 通道可恢复（32 号 §32.5.3）
+        let src = "pub fn main(z: int) -> int {\n    return try (10 / z) catch {\n        _ -> 0\n    }\n}\n";
+        let err = Vm::new()
+            .run(compile(src), None, vec![Value::Int(0)])
+            .expect_err("div zero");
+        assert!(
+            matches!(err, VmError::Runtime(_)),
+            "Runtime 错误不应被 catch 拦截，got {err:?}"
+        );
+    }
+
+    #[test]
+    fn try_catch_uncaught_reaches_host() {
+        // 无 catch：维持既有语义——Raised 到宿主边界
+        let src = "tag NetErr = Fail(string)\npub fn main() {\n    throw Fail(\"up\")\n}\n";
+        match run_src(src) {
+            Err(VmError::Raised(_)) => {}
+            other => panic!("expect Raised to host, got {other:?}"),
         }
     }
 

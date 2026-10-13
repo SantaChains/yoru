@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- **`try e catch { 臂 }` 本地捕获失败（2026-10-13，决策 87 阶段①）**：`throw` 抛出的失败值首次可在语言内恢复——`catch` 臂复用 match 文法（`Fail(e) -> ...` / `_ -> ...`），错误值可为任意类型（臂须含兜底臂），臂结果类型与 `try` 体统一。跨帧传播自动被调用方 catch 截获；未捕获维持原语义到宿主边界。除零等运行时错误**不可**捕获（程序 bug ≠ 可预期失败）。`catch` 成为第 29 个关键字（冻结条款例外记账：本决策同时砍掉「throw 不可恢复」整条语义，净表达力为减）。测试 +12（语法解析/typeck 穷尽与统一/VM 同帧·跨帧·截栈·嵌套·Runtime 不可捕·宿主边界），workspace 224 全绿。
 - **变体载荷 `_` 显式丢弃（2026-10-13，决策 86）**：`match t { Node(_) -> ... }` 对带载荷变体合法——此前强制命名绑定（未用绑定触发未用警告）。`Err(NotFound)` 字面变体、`Err(e)` 绑定、`Node(_)` 丢弃三种载荷形态齐备；无载荷变体加括号（含 `(_)`）维持 Y-T0002 拒绝。
 - **Result-match 正式入 spec（2026-10-13，D-27 + 决策 86）**：19 号 19.5 的「match 不能直接匹配 Result」更正记录作废——`Ok(v)`/`Err(e)` 构造器模式 + 穷尽性（D-27 落地）回写语法权威。
 - **语言特色全景单文件示范 `examples/showcase.yoru`（2026-10-13）**：12 节覆盖常量折叠 / distinct / 泛型 call-site 实例化 / 闭包快照与嵌套祖父捕获 / 管道与切片 / map KV 迭代 / struct COW 与 spread 更新 / 槽位消歧 / 控制流 / Option 收窄 / Result-match 全形态 / rune——单文件 e2e 回归网（`showcase_e2e_full_feature_file`：typeck→lower→verify→demo host 运行，12 节输出逐行钉死），LBC0 build/run 往返输出一致。

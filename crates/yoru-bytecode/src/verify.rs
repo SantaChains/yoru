@@ -267,6 +267,7 @@ fn effect(op: Opcode, arg: u32, m: &Lbc0Module) -> Option<(usize, usize)> {
         Opcode::ForNext => (0, 1), // 弹下个值→局部槽，压 bool；游标留栈（Lua 式）
         Opcode::Return | Opcode::Raise => (1, 0),
         Opcode::Jmp | Opcode::JmpIf | Opcode::JmpIfNot => (0, 0),
+        Opcode::CatchPush | Opcode::CatchPop => (0, 0),
     })
 }
 
@@ -328,6 +329,24 @@ fn analyze(code: &[Instr], m: &Lbc0Module) -> Result<(Vec<Option<usize>>, usize)
                 work.push((target as usize, after));
                 max_depth = max_depth.max(after);
                 work.push((pc + 1, after));
+                continue;
+            }
+            Opcode::CatchPush => {
+                // arg = catch 块相对偏移（决策 87）。catch 块入口深度静态可推：
+                // Raise 命中 handler 时截栈至 CatchPush 时基线并压错误值 →
+                // 入口深度 = depth + 1。作为静态后继纳入分析，catch 体获得
+                // 与主路径同等的全量验证（可达性/栈深/跳转界）。
+                let target = pc as i64 + instr.sarg() as i64;
+                if target < 0 || target as usize >= n {
+                    return Err(VerifyError::JumpOutOfRange {
+                        pc,
+                        target: instr.sarg(),
+                        code_len: n,
+                    });
+                }
+                work.push((target as usize, depth + 1));
+                max_depth = max_depth.max(depth + 1);
+                work.push((pc + 1, depth));
                 continue;
             }
             Opcode::JmpIfNotLt | Opcode::JmpIfNotLe | Opcode::JmpIfNotGt | Opcode::JmpIfNotGe => {

@@ -487,6 +487,7 @@ impl Lexer<'_> {
             "const" => TokenKind::Const,
             "as" => TokenKind::As,
             "try" => TokenKind::Try,
+            "catch" => TokenKind::Catch,
             "throw" => TokenKind::Throw,
             "await" => TokenKind::Await,
             "distinct" => TokenKind::Distinct,

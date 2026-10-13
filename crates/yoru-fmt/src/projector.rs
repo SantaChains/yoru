@@ -294,6 +294,18 @@ fn expr(e: &ast::Expr, s: &mut String) {
             s.push_str("try ");
             expr(x, s);
         }
+        ExprKind::TryCatch { inner, arms } => {
+            s.push_str("try ");
+            expr(inner, s);
+            s.push_str(" catch {");
+            for a in arms {
+                pat(&a.pattern, s);
+                s.push_str("->");
+                expr(&a.body, s);
+                s.push(';');
+            }
+            s.push('}');
+        }
         ExprKind::Await(x) => {
             s.push_str("await ");
             expr(x, s);

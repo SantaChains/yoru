@@ -145,6 +145,16 @@ fn visit_expr(e: &ast::Expr, p: &mut Plan, q: &mut Vec<usize>) {
                 visit_expr(&a.body, p, q);
             }
         }
+        ExprKind::TryCatch { inner, arms } => {
+            visit_expr(inner, p, q);
+            if let Some(a) = arms.first() {
+                q.push(a.span.start);
+            }
+            for a in arms {
+                p.breaks.insert(a.span.start);
+                visit_expr(&a.body, p, q);
+            }
+        }
         ExprKind::Lambda { body, .. } => match &**body {
             FnBody::Block(b) => visit_block(b, p, q),
             FnBody::Expr(e) => visit_expr(e, p, q),

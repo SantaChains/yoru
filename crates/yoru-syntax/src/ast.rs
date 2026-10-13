@@ -246,6 +246,12 @@ pub enum ExprKind {
     },
     /// `try expr`（决策 54：双传播）
     Try(Box<Expr>),
+    /// `try expr catch { 臂 }`（决策 87：可捕获失败通道——臂复用 match 臂机制，
+    /// 错误值类型任意，臂结果须与 try 体类型统一）
+    TryCatch {
+        inner: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     /// `await expr`（仅宿主能力，14.5）
     Await(Box<Expr>),
     Unary {
