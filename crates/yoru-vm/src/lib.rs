@@ -181,6 +181,11 @@ pub struct Vm {
     /// opcode 直方图（P0a① profile 释疑）：None = 零开销（热循环单分支）。
     /// `enable_op_histogram` 显式开启，run 结束经 `op_histogram()` 读取。
     op_histogram: Option<Box<[u64]>>,
+    /// 中断节流倒数（2026-10-13 数学验证）：到 0 触发检查并重置为
+    /// `check_interval`。等价取代热路径 `%` 取模——运行时变量除法每指令
+    /// ~25 cycles（x64 div，非二次幂无法强度削减），dec+cmp ~1 cycle。
+    /// 触发点逐位不变（第 k·check_interval 条）。
+    check_countdown: u64,
 }
 
 enum Step {
@@ -213,6 +218,9 @@ impl Vm {
             interrupt: None,
             deadline: None,
             op_histogram: None,
+            // max(1,·)：check_interval=0 在取模实现下是除零 panic 面，
+            // 倒数实现下按「每次检查」收敛为 1——不 panic（安全边界）。
+            check_countdown: Limits::default().check_interval.max(1),
         }
     }
 
@@ -228,6 +236,7 @@ impl Vm {
 
     pub fn set_limits(&mut self, limits: Limits) {
         self.limits = limits;
+        self.check_countdown = self.limits.check_interval.max(1);
     }
 
     pub fn limits(&self) -> &Limits {
@@ -407,6 +416,8 @@ impl Vm {
         self.stats.calls = 0;
         self.stats.max_call_depth = 0;
         self.stats.heap_bytes = 0;
+        // 节流倒数随 run 作用域重置（与指令计数同生命周期）
+        self.check_countdown = self.limits.check_interval.max(1);
     }
 
     fn module_ref(&self) -> &Lbc0Module {
@@ -529,13 +540,17 @@ impl Vm {
     }
 
     fn step(&mut self) -> Result<Step, VmError> {
-        // 预算与节流（决策 71）
+        // 预算与节流（决策 71）：max_instructions 每条检查（cmp 便宜，上界
+        // 精确）；中断/时钟经倒数计数器节流——取代 `%` 取模（运行时变量
+        // 除法 ~25 cycles/条，非二次幂不可强度削减），触发点逐位等价。
         self.stats.instructions += 1;
         self.stats.total_instructions += 1;
         if self.stats.instructions > self.limits.max_instructions {
             return Err(VmError::Limit(LimitKind::Instructions));
         }
-        if self.stats.instructions % self.limits.check_interval == 0 {
+        self.check_countdown -= 1;
+        if self.check_countdown == 0 {
+            self.check_countdown = self.limits.check_interval.max(1);
             if let Some(d) = self.deadline {
                 if Instant::now() >= d {
                     return Err(VmError::Limit(LimitKind::Deadline));

@@ -6,6 +6,10 @@
 ## [Unreleased]
 
 ### Added
+- **中断节流倒数计数器（2026-10-13，数学验证 + 多源调研批次）**：热路径 `instructions % check_interval`（运行时变量 64 位 div ~25 cycles/条，非二次幂不可强度削减）→ 倒数计数器（dec+cmp ~1 cycle），触发点逐位等价（第 k·interval 条）；`max(1,·)` 消除 interval=0 除零 panic 面。实测 sort median 540-567 → 496.6ms（**-8~9%**），checksum 逐位一致。max_instructions 保留每条精确检查（上界语义不弱化）。
+- **激进优化三线调研取舍档（25 号 §4-b）**：computed goto/tail-call threading（Rust 稳定下 match≈computed goto，nightly 拒绝）；copy-and-patch stencils（CPython 三年 5-6%，登记远期）；GPU 后端 NVRTC/PTX/persistent kernel（launch 税 ~5μs + 嵌入可移植性铁律冲突，登记远期可选后端）。
+
+### Added
 - **CLI 全命令面同构统一（2026-10-13，一致性审计）**：① 退出码语义收敛——用法错误（unknown flag/缺参）= 2，执行错误（含 IO/编译/运行/断言）= 1（`check`/`build`/`run` 的 IO 错误原为 2，与 fmt/doctest 冲突，行为级实证修正）；② `doctest` 补齐同构 flag 解析骨架（原 `-x` 参数被静默当路径——接口不一致实证修复）；③ 新增 `-h|--help|help`（成功请求 exit 0，clig.dev），help 与未知命令共用 `print_help` 单一事实源并补全 `[--stats]`/`-l` 缺档；④ flag 语法约定成文：布尔 `--name`、带值 `--name=value`（不支持空格形式），fmt 保留 gofmt 系短形式 `-w`/`-l`。
 - **诊断流统一（2026-10-13）**：诊断详情（severity [line:col] [code] message）→ **stderr**（rustc/gcc 惯例，clig.dev 日志类）；结果摘要与程序 print 输出 → stdout——`2>/dev/null` 后 stdout 只剩摘要行。
 
