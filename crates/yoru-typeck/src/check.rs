@@ -1494,6 +1494,10 @@ impl<'e> Checker<'e> {
                     }
                     _ => false,
                 },
+                // 内建 Result：Ok/Err 双臂齐备即穷尽（决策 54）
+                Ty::Res(..) => {
+                    covered.contains(&"Ok".to_string()) && covered.contains(&"Err".to_string())
+                }
                 _ => false,
             };
         if !exhaustive {
@@ -1539,6 +1543,24 @@ impl<'e> Checker<'e> {
                 vec![(n.clone(), scrut.clone())]
             }
             Pattern::Variant { name, payload } => {
+                // 内建 Result 变体（决策 54）：`Ty::Res` 的 Ok/Err 模式。
+                // 运行时（lower/VM）早已支持而 typeck 缺位——Result-match 被
+                // Y-T0002 整体拒绝（showcase.yoru 红证，26 号类落差）。
+                // 语义对齐 lower：payload 是绑定名（`Err(e)` 绑 e: err 位；
+                // `Err(v)` 绑 v 为载荷值，不做嵌套变体检查）。
+                if name == "Ok" || name == "Err" {
+                    if let Ty::Res(o, e) = scrut {
+                        let want = if name == "Ok" {
+                            (**o).clone()
+                        } else {
+                            (**e).clone()
+                        };
+                        return match payload {
+                            Some(p) => vec![(p.clone(), want)],
+                            None => vec![], // 载荷被忽略（lower Pop）
+                        };
+                    }
+                }
                 let (owner, tag_args) = match scrut {
                     Ty::Named { name, args } => (name.clone(), args.clone()),
                     other => {

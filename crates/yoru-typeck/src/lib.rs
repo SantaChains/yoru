@@ -138,6 +138,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn result_match_patterns_typeck() {
+        // Result-match 的 Ok/Err 模式此前被 Y-T0002 整体拒绝（typeck 缺位，
+        // 运行时却支持——VM 测试不走 typeck 所以未暴露；showcase.yoru 红证）。
+        // 修后：Ok 绑定 ok 位、Err 绑定 err 位（载荷递归），穷尽性 Ok+Err 齐备。
+        let ok = errors(
+            "tag E = NotFound | BadInput(string)\nfn find(xs: [int], want: int) -> Result[int, E] {\n    for i in 0..len(xs) {\n        if xs[i] == want {\n            return Ok(i)\n        }\n    }\n    return Err(NotFound)\n}\nfn probe(want: int) -> Result[int, E] {\n    let a = try find([3, 1, 4, 1, 5], want)\n    return match find([3, 1, 4, 1, 5], want) {\n        Ok(v) -> Ok(a * 10 + v)\n        Err(NotFound) -> Ok(0 - 1)\n        Err(other) -> Err(other)\n    }\n}\n",
+        );
+        assert!(ok.is_empty(), "Result-match Ok/Err 模式不应报错: {ok:#?}");
+        // 穷尽性：缺 Err 臂必须 Y-T0015
+        let bad = errors(
+            "tag E = Boom\nfn f(r: Result[int, E]) -> int {\n    return match r {\n        Ok(v) -> v\n    }\n}\n",
+        );
+        assert!(bad.iter().any(|d| d.code.as_deref() == Some("Y-T0015")));
+    }
+
     // ===== 决策 26：int/float 严格 as =====
 
     #[test]
