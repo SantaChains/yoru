@@ -6,6 +6,13 @@
 ## [Unreleased]
 
 ### Added
+- **CLI 全命令面同构统一（2026-10-13，一致性审计）**：① 退出码语义收敛——用法错误（unknown flag/缺参）= 2，执行错误（含 IO/编译/运行/断言）= 1（`check`/`build`/`run` 的 IO 错误原为 2，与 fmt/doctest 冲突，行为级实证修正）；② `doctest` 补齐同构 flag 解析骨架（原 `-x` 参数被静默当路径——接口不一致实证修复）；③ 新增 `-h|--help|help`（成功请求 exit 0，clig.dev），help 与未知命令共用 `print_help` 单一事实源并补全 `[--stats]`/`-l` 缺档；④ flag 语法约定成文：布尔 `--name`、带值 `--name=value`（不支持空格形式），fmt 保留 gofmt 系短形式 `-w`/`-l`。
+- **诊断流统一（2026-10-13）**：诊断详情（severity [line:col] [code] message）→ **stderr**（rustc/gcc 惯例，clig.dev 日志类）；结果摘要与程序 print 输出 → stdout——`2>/dev/null` 后 stdout 只剩摘要行。
+
+### Changed
+- **doctest check 块同构复用 `check_source`**：此前手写 `parse_source + check_program` 管道存在接口差异——`parse_source` 词法错误提前返回只报**第一个**，`check_source` 累积全部诊断；统一后坏块断言面与 `yoru check` 逐位一致（同一诊断管线同一结果），并删除一层手写管道。
+
+### Added
 - **fuzz 双面分歧归档（2026-10-13，质量审计）**：`Outcome::Diverged` 独立承载「typeck 过但 lower 拒」（不再折叠进 `Reached(Typeck)`），长跑逐例归档 `fuzz-artifacts/diverg_case*.yoru`（含诊断码，V1 对拍直接素材）；报告剔除结构性恒零的 reached typeck/lower 死输出行。
 
 ### Removed

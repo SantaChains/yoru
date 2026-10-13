@@ -222,12 +222,13 @@ pub fn check_block(block: &Block) -> Verdict {
 }
 
 /// check 块：error 级诊断码集合 == 断言集合（精确，写全防漂移）。
+/// 走 `check_source` 单一入口（与可执行块同构复用）——此前手写
+/// `parse_source + check_program` 管道存在接口差异：parse_source 词法
+/// 错误提前返回只报**第一个**，check_source 累积全部诊断。坏块断言面
+/// 应与 CLI `yoru check` 逐位一致（同一诊断管线，同一结果）。
 fn check_error_block(block: &Block) -> Verdict {
     let env = Env::core();
-    let diags = match yoru_syntax::parse_source(&block.code) {
-        Ok(program) => yoru_typeck::check_program(&program, &env),
-        Err(ds) => ds,
-    };
+    let diags = yoru_typeck::check_source(&block.code, &env).0;
     let got: BTreeSet<String> = diags
         .iter()
         .filter(|d| matches!(d.severity, Severity::Error))

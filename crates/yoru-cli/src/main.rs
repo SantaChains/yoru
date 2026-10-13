@@ -1,7 +1,13 @@
-//! yoru CLI：`yoru check` / `yoru build` / `yoru run` —— 前端 + typeck + LBC0 + VM。
+//! yoru CLI：`yoru check` / `yoru build` / `yoru run` / `yoru fmt` / `yoru doctest`。
 //!
-//! 阶段 1-3（20 号路线图）；clig.dev 退出码契约（决策 65）：
-//! 0 = 无错误（可有警告）、1 = 有错误、2 = 用法错误。
+//! 阶段 1-3（20 号路线图）+ F2（fmt）+ D 线（doctest）；clig.dev 退出码契约
+//! （决策 65）：0 = 无错误（可有警告）、1 = 执行错误（含 IO/编译/运行/断言）、
+//! 2 = 用法错误（unknown flag / 缺参数）。
+//!
+//! flag 语法统一约定：布尔 flag `--name`；带值 flag 一律 `--name=value`
+//! （不支持空格形式，help 即文档）；`fmt` 额外保留 gofmt 系短形式 `-w`/`-l`。
+//! 各子命令解析骨架同构（flag 臂 → 位置参数臂 → unknown 拒绝臂），
+//! 语义各异不强 DRY（间接层损害可读性，2026-10-13 审计定夺）。
 
 use std::process::ExitCode;
 use yoru_syntax::Diagnostic;
@@ -98,15 +104,26 @@ fn main() -> ExitCode {
                 }
             }
             if files.is_empty() || (write_in_place && check_only) {
-                eprintln!("usage: yoru fmt [--check | -w] <file.yoru>...");
+                eprintln!("usage: yoru fmt [--check|-l | -w] <file.yoru>...");
                 ExitCode::from(2)
             } else {
                 fmt(&files, write_in_place, check_only)
             }
         }
         Some("doctest") => {
-            let paths: Vec<std::path::PathBuf> =
-                args[2..].iter().map(std::path::PathBuf::from).collect();
+            // 同构解析骨架（与 check/build/run 一致）：目前无 flag，但
+            // `-` 开头的参数必须拒绝为用法错误——否则 flag 拼写错误会被
+            // 静默当路径处理（"cannot read --foo"，接口不一致实证修复）。
+            let mut paths: Vec<std::path::PathBuf> = Vec::new();
+            for a in &args[2..] {
+                match a.as_str() {
+                    s if !s.starts_with('-') => paths.push(std::path::PathBuf::from(s)),
+                    s => {
+                        eprintln!("error: unknown flag `{s}`");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
             if paths.is_empty() {
                 eprintln!("usage: yoru doctest <file.md|.yoru|dir>...");
                 ExitCode::from(2)
@@ -114,17 +131,27 @@ fn main() -> ExitCode {
                 doctest(&paths)
             }
         }
+        Some("-h") | Some("--help") | Some("help") => {
+            print_help();
+            ExitCode::SUCCESS
+        }
         Some("--version") | Some("-V") => {
             println!("yoru 0.1.0 (frontend+typeck+bytecode+vm, spec 19 v2, LBC0 1.0)");
             ExitCode::SUCCESS
         }
         _ => {
-            eprintln!(
-                "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] <file.yoru>      compile + execute via T1 VM\n  yoru fmt [--check | -w] <file.yoru>...              format source (stdout | in-place | check)\n  yoru doctest <file.md|.yoru|dir>...                 extract and verify embedded code blocks\n  yoru --version"
-            );
+            print_help();
             ExitCode::from(2)
         }
     }
+}
+
+/// 顶层 usage（`-h`/`--help` 与未知子命令共用同一份——单一事实源）。
+/// help 成功请求 exit 0、未知命令 exit 2（clig.dev）。
+fn print_help() {
+    eprintln!(
+        "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] [--stats] <file.yoru>  compile + execute via T1 VM\n  yoru fmt [--check|-l | -w] <file.yoru>...           format source (stdout | in-place | check)\n  yoru doctest <file.md|.yoru|dir>...                 extract and verify embedded code blocks\n  yoru -h | --help                                    show this help\n  yoru --version"
+    );
 }
 
 /// 格式化（F2）。语义不变性由 yoru-fmt 的 D3 双断言 + 幂等验收协议在
@@ -191,8 +218,9 @@ fn check(path: &str, host_demo: bool) -> ExitCode {
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
+            // IO/执行错误 = 1（与 fmt/doctest 对齐）；用法错误才 = 2
             eprintln!("error: cannot read {path}: {e}");
-            return ExitCode::from(2);
+            return ExitCode::FAILURE;
         }
     };
     let env = if host_demo {
@@ -241,7 +269,7 @@ fn build(path: &str, host_demo: bool, out: Option<&str>) -> ExitCode {
         }
         Err(e) => {
             eprintln!("error: cannot write {out_path}: {e}");
-            ExitCode::from(2)
+            ExitCode::FAILURE
         }
     }
 }
@@ -296,8 +324,9 @@ fn compile_to_module(path: &str, host_demo: bool) -> Result<yoru_bytecode::Lbc0M
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
+            // IO/执行错误 = 1（与 fmt/doctest 对齐）；用法错误才 = 2
             eprintln!("error: cannot read {path}: {e}");
-            return Err(ExitCode::from(2));
+            return Err(ExitCode::FAILURE);
         }
     };
     let env = if host_demo {
@@ -345,7 +374,9 @@ fn compile_to_module(path: &str, host_demo: bool) -> Result<yoru_bytecode::Lbc0M
     Ok(module)
 }
 
-/// 人类可读输出：`severity [line:col] [code] message`（JSON 输出留 T5）。
+/// 人类可读诊断：`severity [line:col] [code] message`（JSON 输出留 T5）。
+/// 输出流契约（与 rustc/gcc 一致）：**诊断详情 → stderr**（日志类，clig.dev），
+/// 结果摘要（`{path}: ok` / doctest 报告）与程序 print 输出 → stdout。
 fn print_diagnostic(src: &str, d: &Diagnostic) {
     let (line, col) = match d.span {
         Some(span) => line_col(src, span.start),
@@ -357,9 +388,9 @@ fn print_diagnostic(src: &str, d: &Diagnostic) {
         yoru_syntax::Severity::Info => "info",
     };
     let code = d.code.as_deref().unwrap_or("-");
-    println!("{sev} [{line}:{col}] [{code}] {}", d.message);
+    eprintln!("{sev} [{line}:{col}] [{code}] {}", d.message);
     for s in &d.suggestions {
-        println!("  help: {s}");
+        eprintln!("  help: {s}");
     }
 }
 
