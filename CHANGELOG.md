@@ -6,11 +6,14 @@
 ## [Unreleased]
 
 ### Added
+- **泛型函数与数据类型（2026-10-13，30 号序 8 泛型批次）**：`fn f[T, U](xs: [T]) -> U` 泛型函数 call-site 实例化——声明期 `T` 解析为类型变量，调用位按实参 unify 绑定（`first([1,2])` → int、`first(["a"])` → string，同函数多实例化零代码膨胀：统一 Value 表示下单份字节码承载全部实例）；lambda 实参参与推断（`apply2(7, fn(n) = "s")` → U=string）；返回类型含未绑定泛型 → 结构化 Y-T0018。泛型 struct/tag 变体构造按载荷反推类型实参（`Boxed(P2<int> { .. })` → `Box2<int>`）+ 泛型变体 match 模式匹配全链工作。类型位方括号兼容形式 `Name[T]` 可用；表达式位类型实参用规范形式 `Name<int>`（`[T]` 与索引文法冲突，裁决限类型位）。
+- **Map 迭代 KV entry（2026-10-13，决策 82 第二步）**：`for kv in m` 产出内建 `KV { key, value }` struct（插入序快照）——`kv.key`/`kv.value` 字段访问与 `${}` 插值全链工作；纯键通道迁移为 `for k in keys(m)`（keys 内建既有）。`KV` 为保留类型名（声明拒绝 Y-T0005）。**破坏性**：LBC0 major 2.0——旧 1.x 产物的键语义与本版不符，重新编译即可。
 - **VM 取指热路径合并（2026-10-13，P1 首步，25 号 §A）**：step() 单次帧尾访问取 (proto, pc) 并推进 + `Frame.proto` 直存（省每条一次 Rc 解引用）。受控 A/B ~1%（严格减法保留）；同批证据裁决：Quickening 算术特化在当前负载形态下建模收益 ~1% 不抵架构成本，**诚实延后**（触发条件：算术密集负载 Add/Sub/Mul/Div 直方图占比 >25%）。
 - **struct 字段访问静态槽位表 + 懒名字（2026-10-13，P0b，25 号 §A）**：字段序由 struct 声明表静态决定，run 装载期预计算 `(struct_id, fid) → slot` 槽位表——GetField/SetField 快路径 O(log k) 二分 + fid 复核（防宿主构造值自对齐漂移），未命中回退线性扫描（语义逐位保留）。成功路径不再为错误信息做 String 堆分配（懒构造）。struct 密集负载（新增 benchmarks/structs）median **1441.1 → 936.7ms（-35%）**，checksum 逐位一致；sort 基准零字段操作（直方图实证），基线持平。
 
 ### Changed
 - **CLI flag 输入域收紧（2026-10-13，质量审计）**：`--heap-mb` 数值域改 u64——负值原会流入限额逻辑产生「一切分配静默失败」的荒谬状态，现解析层即拒绝（exit 2）；巨值饱和转换（实际无限，语义保真）。`--entry=`/`--out=` 空值解析层拒绝（空名永远非法、空路径只会产出不可读写错误）——fail-fast 优于运行时结构化错误。`.yoruc` 构建产物入 `.gitignore`（可由 build 再生，不入库）。
+- **同型不可算术诊断更正**：`xs + xs`（List 等同型不支持算术）原报「期望 [T] 得到 [T]」自相矛盾，现报「类型不支持算术运算」（Y-T0022）。
 
 ### Added
 - **`yoru run` LBC0 直载（2026-10-13，P0a④，25 号 §A）**：`yoru run foo.yoruc` 跳过前端全链（parse/typeck/lower）直入 VM——`build` + `run` 构成产物分发闭环。真实性/合法性双闸：deserialize 把关 magic/version/CRC32，verify_module 坚持 validate-before-use（不豁免自产字节码）；坏产物结构化拒绝 exit 1。`check`/`build` 误入 `.yoruc` 给诚实指引（替代 UTF-8 解码噪音）。e2e：sort 与 std-import 模块直载输出逐位一致；`--entry`/`--host`/`--stats`/停机三旋钮全部可用。启动实测：tiny min 36.6→28.9ms（-21%，地板 = 进程孵化 ~28ms）；原「32→16ms」预测证伪（小模块前端仅 0-5ms），真实收益面在嵌入进程内加载与大模块分发。

@@ -92,6 +92,52 @@ mod tests {
         assert!(errs.is_empty(), "typeck errors: {errs:#?}");
     }
 
+    // ===== D-13：泛型函数 call-site 实例化 =====
+
+    #[test]
+    fn generic_fn_instantiation() {
+        // D-13：`fn first[T](xs: [T]) -> T` 声明期 T 不得报未知类型；
+        // 调用位按实参实例化（apply_sig 既有管线）。
+        let ok = errors(
+            "fn first[T](xs: [T]) -> T {\n    return xs[0]\n}\nfn main() -> int {\n    return first([1, 2, 3])\n}\n",
+        );
+        assert!(ok.is_empty(), "泛型 fn 声明与调用不应报错: {ok:#?}");
+        // 跨类型实例化：同一泛型 fn 的 string 实例。
+        let ok2 = errors(
+            "fn first[T](xs: [T]) -> T {\n    return xs[0]\n}\nfn main() -> string {\n    return first([\"a\"])\n}\n",
+        );
+        assert!(ok2.is_empty(), "泛型 fn 第二实例不应报错: {ok2:#?}");
+    }
+
+    #[test]
+    fn generic_fn_inference_via_lambda() {
+        // T/U 双变量：U 经 lambda body 推断（bind_arg unify + check_lambda
+        // contains_generic 跳过）；body 内函数值调用 f(x): U 为泛型域合法
+        // 自由变量（apply_sig Y-T0018 兜底域内放行）。
+        let ok = errors(
+            "fn apply2[T, U](x: T, f: (T) -> U) -> U {\n    return f(x)\n}\nfn main() -> string {\n    return apply2(5, fn(n: int) = \"s\")\n}\n",
+        );
+        assert!(ok.is_empty(), "双变量泛型 + lambda 推断不应报错: {ok:#?}");
+        // 泛型域内自由变量流动：body 内 f(x): U 传播到 return。
+        let ok2 = errors(
+            "fn apply1[T, U](f: (T) -> U, x: T) -> U {\n    let y = f(x)\n    return y\n}\n",
+        );
+        assert!(ok2.is_empty(), "泛型域内 f(x): U 不应报错: {ok2:#?}");
+    }
+
+    #[test]
+    fn generic_fn_unbound_typaram_diag() {
+        // U 只出现在返回位、调用位实参无法确定 → Y-T0018（apply_sig 既有
+        // 诊断）；body 内 return x 另有 T≠U mismatch，此处断言调用位面。
+        let bad = errors(
+            "fn mk[T, U](x: T) -> U {\n    return x\n}\nfn main() -> int {\n    let _ = mk(5)\n    return 0\n}\n",
+        );
+        assert!(
+            bad.iter().any(|d| d.code.as_deref() == Some("Y-T0018")),
+            "未绑定泛型应 Y-T0018: {bad:#?}"
+        );
+    }
+
     // ===== 决策 26：int/float 严格 as =====
 
     #[test]
@@ -107,16 +153,24 @@ mod tests {
     }
 
     #[test]
-    fn map_for_iter_yields_keys() {
-        // 决策 82 第一步：Map 迭代产出键（对齐 VM Cursor::Map 既有语义）。
+    fn map_for_iter_yields_kv() {
+        // 决策 82 第二步：for-in-Map 产出 KV entry（.key/.value）；纯键
+        // 通道迁移为 keys(m) 内建。
         let ok = errors(
-            "fn main() -> int {\n    let mut m: [string: int] = [:]\n    m[\"a\"] = 1\n    let n = 0\n    for k in m {\n        print(k)\n    }\n    return n\n}\n",
+            "fn main() -> int {\n    let mut m: [string: int] = [:]\n    m[\"a\"] = 1\n    let mut t = 0\n    for kv in m {\n        t = t + kv.value\n    }\n    for k in keys(m) {\n        t = t + 1\n    }\n    return t\n}\n",
         );
-        assert!(ok.is_empty(), "for k in map 不应报错: {ok:#?}");
+        assert!(ok.is_empty(), "KV entry + keys 通道不应报错: {ok:#?}");
+        // KV 非法字段拒绝
         let bad = errors(
-            "fn main() -> int {\n    for x in 5 {\n        print(x)\n    }\n    return 0\n}\n",
+            "fn main() -> int {\n    let mut m: [string: int] = [:]\n    m[\"a\"] = 1\n    let mut t = 0\n    for kv in m {\n        t = t + kv.bogus\n    }\n    return t\n}\n",
         );
-        assert_eq!(codes(&bad), vec!["Y-T0002"], "{bad:#?}");
+        assert!(
+            bad.iter().any(|d| d.code.as_deref() == Some("Y-T0026")),
+            "KV 非法字段应 Y-T0026（unit 级联可有）: {bad:#?}"
+        );
+        // 内建名保留：struct KV 声明拒绝
+        let reserved = errors("struct KV {\n    x: int\n}\n");
+        assert_eq!(codes(&reserved), vec!["Y-T0005"], "{reserved:#?}");
     }
 
     #[test]

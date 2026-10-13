@@ -178,6 +178,9 @@ pub struct Vm {
     /// Vec<(u32, Value)> 胖对齐的线性扫描；无失效、无站点存储、天然多态
     /// （按 struct_id 分桶而非按站点——同一站点多 struct 类型亦精确）。
     struct_slots: Vec<Box<[(u32, u32)]>>,
+    /// 决策 82 第二步：KV entry struct 元数据 (struct_id, key_fid, value_fid)。
+    /// lower 预置保证存在；None 仅防御宿主手工构造模块（退化键产出）。
+    kv_meta: Option<(u32, u32, u32)>,
     debug: DebugInfo,
     // ---- 执行状态 ----
     frames: Vec<Frame>,
@@ -231,6 +234,7 @@ impl Vm {
             // 倒数实现下按「每次检查」收敛为 1——不 panic（安全边界）。
             check_countdown: Limits::default().check_interval.max(1),
             struct_slots: Vec::new(),
+            kv_meta: None,
         }
     }
 
@@ -415,6 +419,30 @@ impl Vm {
         self.fid_of_str = inst.fid_of_str;
         // P0b：槽位表随 run 作用域重建（Vm 跨实例复用，模块可能更换）
         self.struct_slots = Self::build_struct_slots(&inst.module, &self.fid_of_str);
+        // 决策 82 第二步：KV struct 元数据（name=="KV" 的声明表定位）
+        self.kv_meta = {
+            let m = &inst.module;
+            let key_fid = m
+                .field_names
+                .iter()
+                .position(|&s| m.strings.get(s as usize).map(String::as_str) == Some("key"))
+                .map(|i| i as u32);
+            let val_fid = m
+                .field_names
+                .iter()
+                .position(|&s| m.strings.get(s as usize).map(String::as_str) == Some("value"))
+                .map(|i| i as u32);
+            match (
+                m.structs
+                    .iter()
+                    .position(|s| m.strings.get(s.name as usize).map(String::as_str) == Some("KV")),
+                key_fid,
+                val_fid,
+            ) {
+                (Some(id), Some(kf), Some(vf)) => Some((id as u32, kf, vf)),
+                _ => None,
+            }
+        };
         self.debug = DebugInfo::from_module(&inst.module).unwrap_or_default();
         self.frames.clear();
         self.stack.clear();
@@ -1192,7 +1220,11 @@ impl Vm {
                         next: 0,
                     },
                     Value::Map(m) => Cursor::Map {
-                        keys: m.borrow().iter().map(|(k, _)| k.clone()).collect(),
+                        entries: m
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
                         next: 0,
                     },
                     other => {
@@ -1239,11 +1271,21 @@ impl Vm {
                             None
                         }
                     }
-                    Cursor::Map { keys, next } => {
-                        if *next < keys.len() {
-                            let v = keys[*next].clone();
+                    Cursor::Map { entries, next } => {
+                        if *next < entries.len() {
+                            let (k, v) = entries[*next].clone();
                             *next += 1;
-                            Some(v)
+                            // 决策 82 第二步：产出 KV entry struct（.key/.value）。
+                            // kv_meta 缺失（宿主手工模块）退化为键产出。
+                            Some(match self.kv_meta {
+                                Some((sid, kf, vf)) => {
+                                    Value::Struct(Rc::new(RefCell::new(StructObj {
+                                        struct_id: sid,
+                                        fields: vec![(kf, k), (vf, v)],
+                                    })))
+                                }
+                                None => k,
+                            })
                         } else {
                             None
                         }
@@ -1822,13 +1864,38 @@ mod tests {
     // ---- 27 号 A3：format_value tag 表反查（归并 D-21） ----
 
     #[test]
-    fn map_for_iter_yields_keys_vm() {
-        // 决策 82 第一步：VM Cursor::Map 产出键快照（决策 31 同构）。
+    fn map_for_iter_yields_kv_vm() {
+        // 决策 82 第二步：for-in-Map 产出 KV entry struct（.key/.value），
+        // 插入序快照（决策 31 同构）。
         let v = run_src(
-            "pub fn main() -> int {\n    let mut m: [string: int] = [:]\n    m[\"b\"] = 2\n    m[\"a\"] = 1\n    let acc: string = \"\"\n    for k in m {\n        acc = acc + k\n    }\n    return len(acc)\n}\n",
+            "pub fn main() -> int {\n    let mut m: [string: int] = [:]\n    m[\"b\"] = 2\n    m[\"a\"] = 1\n    let mut acc = 0\n    for kv in m {\n        acc = acc + kv.value\n    }\n    return acc\n}\n",
         )
         .expect("run");
-        assert_eq!(v, Value::Int(2)); // 两键各拼一次 → len 2（插入序 b,a）
+        assert_eq!(v, Value::Int(3));
+    }
+
+    #[test]
+    fn map_kv_key_value_fields_vm() {
+        // KV 双字段访问 + 插值（插入序 b,a）。
+        let v = run_src(
+            "pub fn main() -> string {\n    let mut m: [int: string] = [:]\n    m[1] = \"one\"\n    m[2] = \"two\"\n    let mut acc = \"\"\n    for kv in m {\n        acc = \"${acc}<${kv.key}=${kv.value}>\"\n    }\n    return acc\n}\n",
+        )
+        .expect("run");
+        let Value::Str(s) = &v else {
+            panic!("expect string, got {v:?}");
+        };
+        assert_eq!(s.as_ref(), "<1=one><2=two>");
+    }
+
+    #[test]
+    fn map_keys_builtin_channel_vm() {
+        // 键通道迁移：纯键迭代走 keys(m) 内建（决策 82 第二步后键不再
+        // 由 for-in-Map 直出）。
+        let v = run_src(
+            "pub fn main() -> int {\n    let mut m: [string: int] = [:]\n    m[\"b\"] = 2\n    m[\"a\"] = 1\n    let mut n = 0\n    for k in keys(m) {\n        n = n + 1\n    }\n    return n\n}\n",
+        )
+        .expect("run");
+        assert_eq!(v, Value::Int(2));
     }
 
     #[test]

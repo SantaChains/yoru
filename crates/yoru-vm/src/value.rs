@@ -49,8 +49,11 @@ pub enum Cursor {
     Range { next: i64, end: i64 },
     /// 字符串按码点迭代（决策 46：禁 s[i]，经迭代/切片获取）
     Str { chars: Vec<char>, next: usize },
-    /// Map 按键快照迭代
-    Map { keys: Vec<Value>, next: usize },
+    /// Map 按键值对快照迭代（决策 82 第二步：产出 KV entry struct）
+    Map {
+        entries: Vec<(Value, Value)>,
+        next: usize,
+    },
 }
 
 /// Map 堆形态：保序 KV（COW 经 Rc 引用计数判定）。

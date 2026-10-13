@@ -199,6 +199,8 @@ pub enum TypeKind {
 #[derive(Clone)]
 pub struct FnInfo {
     pub name: String,
+    /// 泛型形参（D-13：lookup 签名解析注入 Ty::Generic 的依据）
+    pub type_params: Vec<String>,
     pub params: Vec<(String, Type)>,
     pub ret: Option<Type>,
     pub span: Span,
@@ -300,6 +302,17 @@ impl DeclTable {
                     params,
                     fields,
                 } => {
+                    // KV 为内建迭代 entry 类型（决策 82 第二步，lower 预置
+                    // struct index 0）——保留名，禁遮蔽（与 stdlib 名同规则）
+                    if name == "KV" {
+                        return Err(Diagnostic::coded(
+                            "Y-T0005",
+                            Severity::Error,
+                            "`KV` 是内建迭代 entry 类型名（for-in-Map 产出，.key/.value），不可声明",
+                            decl.span,
+                        )
+                        .with_suggestion("换个名字，如 `KeyValue`"));
+                    }
                     if t.types
                         .insert(
                             name.clone(),
@@ -344,6 +357,8 @@ impl DeclTable {
                         .iter()
                         .map(|f| FnInfo {
                             name: f.name.clone(),
+                            // impl 方法暂不承诺泛型（协议分发独立批次）
+                            type_params: Vec::new(),
                             params: f
                                 .params
                                 .iter()
@@ -372,6 +387,7 @@ impl DeclTable {
                 ast::DeclKind::Fn(f) => {
                     let info = FnInfo {
                         name: f.name.clone(),
+                        type_params: f.type_params.clone(),
                         params: f
                             .params
                             .iter()

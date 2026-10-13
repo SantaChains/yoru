@@ -191,7 +191,7 @@ enum LvStep<'a> {
 
 impl Lowerer {
     fn new(host_fns: HashSet<String>) -> Lowerer {
-        Lowerer {
+        let mut lw = Lowerer {
             m: Lbc0Module {
                 version: crate::module::VERSION,
                 flags: 0,
@@ -221,7 +221,24 @@ impl Lowerer {
             line_tabs: HashMap::new(),
             cur: None,
             host_fns,
-        }
+        };
+        lw.preset_kv();
+        lw
+    }
+
+    /// 决策 82 第二步：KV entry 内建 struct 预置为 index 0——for-in-Map
+    /// 产出 `KV { key, value }` struct，GetField/SetField 槽位表与
+    /// NEWSTRUCT 对齐机制天然覆盖，typeck 与 VM 无需专用通道。
+    fn preset_kv(&mut self) {
+        debug_assert!(self.m.structs.is_empty(), "KV must be struct index 0");
+        let sname = self.intern("KV");
+        let kf = self.field_id("key");
+        let vf = self.field_id("value");
+        self.m.structs.push(StructInfo {
+            name: sname,
+            fields: vec![kf, vf],
+        });
+        self.structs.insert("KV".to_string(), 0);
     }
 
     fn intern(&mut self, s: &str) -> u32 {

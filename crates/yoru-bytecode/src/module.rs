@@ -23,7 +23,9 @@
 use crate::instr::Instr;
 
 pub const MAGIC: u32 = 0x4C_42_43_30; // "LBC0"
-pub const VERSION: u16 = 1 << 8; // 1.0
+/// 2.0：KV entry 语义变更（决策 82 第二步）——for-in-Map 产出 KV struct
+/// 取代键；旧 1.x 产物语义不符，major 拒绝。
+pub const VERSION: u16 = 2 << 8; // 2.0
 
 pub const FLAG_DEBUG: u16 = 1 << 0;
 

@@ -86,6 +86,9 @@ pub struct Checker<'e> {
     diags: Vec<Diagnostic>,
     scopes: Vec<Scope>,
     fn_ret: Option<Ty>,
+    /// 当前检查中 fn 的泛型形参（D-13）：resolver() 注入 Ty::Generic，
+    /// body 内 `let x: T` 等注解位与签名位统一泛型感知；非 fn 上下文为空。
+    fn_typarams: Vec<String>,
     loop_depth: usize,
     used_imports: HashMap<String, bool>,
 }
@@ -156,6 +159,7 @@ impl<'e> Checker<'e> {
             diags: Vec::new(),
             scopes: vec![Scope::default()],
             fn_ret: None,
+            fn_typarams: Vec::new(),
             loop_depth: 0,
             used_imports,
         })
@@ -169,7 +173,12 @@ impl<'e> Checker<'e> {
         Resolver {
             decls: &self.decls,
             env: self.env,
-            subst: HashMap::new(),
+            subst: self
+                .fn_typarams
+                .iter()
+                .cloned()
+                .map(|t| (t.clone(), Ty::Generic(t)))
+                .collect(),
         }
     }
 
@@ -359,6 +368,7 @@ impl<'e> Checker<'e> {
         for decl in &program.decls {
             match &decl.kind {
                 ast::DeclKind::Fn(f) => self.check_fn(
+                    f.type_params.clone(),
                     f.params
                         .iter()
                         .map(|p| (p.name.clone(), p.ty.clone()))
@@ -370,6 +380,7 @@ impl<'e> Checker<'e> {
                 ast::DeclKind::Impl { fns, .. } => {
                     for f in fns {
                         self.check_fn(
+                            Vec::new(), // impl 方法暂不承诺泛型（协议分发独立批次）
                             f.params
                                 .iter()
                                 .map(|p| (p.name.clone(), p.ty.clone()))
@@ -387,11 +398,15 @@ impl<'e> Checker<'e> {
 
     fn check_fn(
         &mut self,
+        typarams: Vec<String>,
         params: Vec<(String, ast::Type)>,
         ret: &Option<ast::Type>,
         body: Option<&ast::FnBody>,
         span: Span,
     ) {
+        // D-13：泛型形参注入 resolver（签名位 T → Ty::Generic），body 检查
+        // 期间生效（let 注解等），退出恢复（非 fn 上下文零泄漏）。
+        let saved = std::mem::replace(&mut self.fn_typarams, typarams);
         let resolved: Vec<Result<Ty, Diagnostic>> = {
             let r = self.resolver();
             params.iter().map(|(_, t)| r.resolve(t)).collect()
@@ -443,6 +458,7 @@ impl<'e> Checker<'e> {
             }
             self.fn_ret = None;
         }
+        self.fn_typarams = saved;
     }
 
     fn pop_scope(&mut self) {
@@ -636,11 +652,10 @@ impl<'e> Checker<'e> {
                     Ty::List(t) => (**t).clone(),
                     Ty::Str => Ty::Rune,  // 决策 46：按码点迭代
                     Ty::Range => Ty::Int, // 决策 77：range 产物迭代为 int（VM ForPrep 同构）
-                    // 决策 82 第一步：Map 迭代产出**键**（VM Cursor::Map 既有语义，
-                    // 键快照按值决策 31——迭代中变异不影响进行中的迭代）。
-                    // KV(.key/.value) 完整履约依赖泛型实例化管线，随泛型批次
-                    // （26 号排期）；届时 `for kv in m` 换语义为产出 entry。
-                    Ty::Map(k, _) => (**k).clone(),
+                    // 决策 82 第二步（泛型批次落地）：Map 迭代产出 KV entry
+                    // struct（`.key`/`.value`，VM Cursor::Map 同语义）；键
+                    // 通道迁移为 `for k in keys(m)`（keys 内建既有）。
+                    Ty::Map(k, v) => Ty::named("KV", vec![(**k).clone(), (**v).clone()]),
                     other => {
                         let s = iter.span;
                         self.err(
@@ -650,9 +665,9 @@ impl<'e> Checker<'e> {
                                 format!("for 只能迭代 list/string/map/range，得到 `{other}`"),
                                 s,
                             )
-                            .with_suggestion(
-                                "Map 迭代产出键；键值对经 `m[k]` 或未来 KV entry（决策 82）",
-                            ),
+                        .with_suggestion(
+                            "Map 迭代产出 KV entry（.key/.value）；纯键用 `for k in keys(m)`（决策 82）",
+                        ),
                         );
                         Ty::Unit
                     }
@@ -868,7 +883,19 @@ impl<'e> Checker<'e> {
             return Some((Resolved::Ty(t), false));
         }
         if let Some(f) = self.decls.fns.get(name) {
-            let r = self.resolver();
+            // D-13：被调泛型 fn 的签名解析注入其形参（T → Ty::Generic），
+            // 返回含 Generic 的签名，apply_sig 调用位实例化。显式构造，
+            // 不用 self.resolver()（那带的是「当前 fn」的形参，语义不同）。
+            let r = Resolver {
+                decls: &self.decls,
+                env: self.env,
+                subst: f
+                    .type_params
+                    .iter()
+                    .cloned()
+                    .map(|t| (t.clone(), Ty::Generic(t)))
+                    .collect(),
+            };
             let ps: Vec<Ty> = f
                 .params
                 .iter()
@@ -1742,7 +1769,31 @@ impl<'e> Checker<'e> {
                 lt.clone()
             }
             _ => {
-                self.err(self.mismatch(lt.clone(), rt.clone(), span));
+                // 同型不可算术（如 List/List）：报「不支持运算」而非
+                // mismatch——「期望 [U] 得到 [U]」自相矛盾诊断是噪音。
+                if lt.same(rt) {
+                    let opname = match op {
+                        BinOp::Add => "+",
+                        BinOp::Sub => "-",
+                        BinOp::Mul => "*",
+                        _ => "/",
+                    };
+                    self.err(
+                        d(
+                            "Y-T0022",
+                            Severity::Error,
+                            format!(
+                                "类型 `{lt}` 不支持算术运算 `{opname}`（决策 21：显式 impl 协议）"
+                            ),
+                            span,
+                        )
+                        .with_suggestion(
+                            "集合构建用字面量与内建（fold/map），或为自定义类型 impl 协议",
+                        ),
+                    );
+                } else {
+                    self.err(self.mismatch(lt.clone(), rt.clone(), span));
+                }
                 lt.clone()
             }
         }
@@ -1783,6 +1834,22 @@ impl<'e> Checker<'e> {
     fn check_field(&mut self, base: Ty, field: &str, span: Span, base_span: Span) -> Ty {
         match &base {
             Ty::Named { name, args } => {
+                // 决策 82 第二步：内建 KV entry（不在用户 decls，特判）
+                if name == "KV" && args.len() == 2 {
+                    return match field {
+                        "key" => args[0].clone(),
+                        "value" => args[1].clone(),
+                        _ => {
+                            self.err(d(
+                                "Y-T0026",
+                                Severity::Error,
+                                format!("KV entry 只有 `key`/`value` 字段，得到 `{field}`"),
+                                span,
+                            ));
+                            Ty::Unit
+                        }
+                    };
+                }
                 if let Some(TypeKind::Struct { params, fields }) = self.decls.types.get(name) {
                     if let Some((_, fty)) = fields.iter().find(|(f, _)| f == field) {
                         let r = Resolver {
@@ -2175,8 +2242,26 @@ impl<'e> Checker<'e> {
             }
             // 带载荷变体构造
             if let Some((owner, Some(payload))) = self.decls.variants.get(n).cloned() {
-                let r = self.resolver();
-                let pt = r.resolve(&payload).unwrap_or(Ty::Unit);
+                // D-14：payload 可能含 owner 泛型形参（`Boxed(P2[T])`）——
+                // 以 Generic 注入解析，payload 表达式检查后 unify 反推实参
+                // （`P2<int>` → T=int → Box2<int>），与 apply_sig 同构。
+                let owner_params: Vec<String> = match self.decls.types.get(&owner) {
+                    Some(TypeKind::Tag { params, .. }) => params.clone(),
+                    _ => Vec::new(),
+                };
+                let r = Resolver {
+                    decls: &self.decls,
+                    env: self.env,
+                    subst: owner_params
+                        .iter()
+                        .cloned()
+                        .map(|t| (t.clone(), Ty::Generic(t)))
+                        .collect(),
+                };
+                let pt = r.resolve(&payload).unwrap_or_else(|e| {
+                    self.err(e);
+                    Ty::Unit
+                });
                 if args.len() != 1 {
                     self.err(d(
                         "Y-T0008",
@@ -2184,14 +2269,44 @@ impl<'e> Checker<'e> {
                         format!("变体 `{n}` 恰好 1 个载荷，得到 {}", args.len()),
                         span,
                     ));
-                } else {
-                    let at = self.check_expr(&args[0], Some(&pt));
-                    if !at.same(&pt) {
-                        let s = span;
-                        self.err(self.mismatch(pt, at, s));
-                    }
+                    return Ty::named(&owner, owner_params.iter().map(|_| Ty::Unit).collect());
                 }
-                return Ty::named(&owner, vec![]);
+                let at = self.check_expr(&args[0], Some(&pt));
+                if at.same(&pt) {
+                    // payload 精确匹配：owner 实参 = payload 里的具名实参
+                    // （`Boxed(P2<int>{..})` → pt=P2[int]），非泛型载荷取 owner 声明序 Unit 占位
+                    let vargs = match &pt {
+                        Ty::Named { args, .. } if !args.is_empty() => args.clone(),
+                        _ => owner_params.iter().map(|_| Ty::Unit).collect(),
+                    };
+                    return Ty::named(&owner, vargs);
+                }
+                if contains_generic(&pt) {
+                    // 泛型载荷：unify 反推 owner 实参
+                    let mut subst: HashMap<String, Ty> = HashMap::new();
+                    self.unify(&pt, &at, &mut subst, span);
+                    let vargs: Vec<Ty> = owner_params
+                        .iter()
+                        .map(|p| substitute(&Ty::Generic(p.clone()), &subst))
+                        .collect();
+                    if vargs.iter().any(contains_generic) {
+                        self.err(
+                            d(
+                                "Y-T0018",
+                                Severity::Error,
+                                format!(
+                                    "变体 `{n}` 的类型实参无法从载荷推断（得到 `{at}`，期望 `{pt}`）"
+                                ),
+                                span,
+                            )
+                            .with_suggestion("为变体绑定加类型标注，或让载荷类型可确定泛型"),
+                        );
+                    }
+                    return Ty::named(&owner, vargs);
+                }
+                let s = span;
+                self.err(self.mismatch(pt, at, s));
+                return Ty::named(&owner, owner_params.iter().map(|_| Ty::Unit).collect());
             }
         }
         let sig: Option<Ty> = match &callee.kind {
@@ -2371,7 +2486,10 @@ impl<'e> Checker<'e> {
             self.bind_arg(&formal_raw, arg, &mut subst);
         }
         let ret = substitute(&ret, &subst);
-        if contains_generic(&ret) {
+        // Y-T0018 兜底仅在泛型域外触发（D-13）：泛型 fn body 内调用函数值
+        // （`f(x): U`，U 为形参类型变量）是泛型抽象的合法形态——自由类型
+        // 变量上推到非泛型调用位再收敛；域内强报会阻断合法泛型代码。
+        if self.fn_typarams.is_empty() && contains_generic(&ret) {
             self.err(
                 d(
                     "Y-T0018",
@@ -2459,7 +2577,8 @@ impl<'e> Checker<'e> {
             ));
         }
         let mut ret = substitute(&ret_ty(), &subst);
-        if contains_generic(&ret) {
+        // 同 apply_sig：泛型域内放行自由类型变量（D-13）。
+        if self.fn_typarams.is_empty() && contains_generic(&ret) {
             self.err(
                 d(
                     "Y-T0018",

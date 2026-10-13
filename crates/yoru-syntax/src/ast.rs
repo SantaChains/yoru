@@ -104,6 +104,8 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct FnDecl {
     pub name: String,
+    /// 泛型形参（19.2 `fn f[T](...)`；D-13 实例化管线的声明侧载体）
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
     pub body: FnBody,

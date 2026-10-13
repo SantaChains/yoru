@@ -576,8 +576,7 @@ impl Parser {
         let start = self.peek().span;
         self.bump(); // fn
         let name = self.expect_ident("function name").ok()?;
-        let params = self.parse_type_params();
-        let _ = params; // fn 泛型参数（19.2 fn_decl [ type_params ]）——当前仅记录
+        let type_params = self.parse_type_params();
         let fparams = self.parse_params();
         let ret = if self.eat(&TokenKind::Arrow) {
             Some(self.parse_type())
@@ -591,6 +590,7 @@ impl Parser {
         };
         Some(FnDecl {
             name,
+            type_params,
             params: fparams,
             ret,
             body,
