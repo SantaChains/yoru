@@ -11,6 +11,7 @@ members = [
     "crates/yoru-fmt",
     "crates/yoru-fuzz",
     "crates/yoru-doctest",
+    "crates/yoru-lsp",
 ]
 
 [workspace.package]

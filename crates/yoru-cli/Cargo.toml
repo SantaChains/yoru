@@ -12,6 +12,7 @@ yoru-bytecode = { path = "../yoru-bytecode" }
 yoru-vm = { path = "../yoru-vm" }
 yoru-fmt = { path = "../yoru-fmt" }
 yoru-doctest = { path = "../yoru-doctest" }
+yoru-lsp = { path = "../yoru-lsp" }
 
 [[bin]]
 name = "yoru"

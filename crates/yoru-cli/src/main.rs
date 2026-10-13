@@ -175,6 +175,18 @@ fn main() -> ExitCode {
                 doctest(&paths)
             }
         }
+        Some("lsp") => {
+            // 语言服务器（序 9）：stdio JSON-RPC，进程随 LSP `exit` 终止。
+            // 不读命令行文件参数——文档由编辑器经 didOpen/didChange 推送。
+            // I/O 错误（stdin/stdout 断连）按失败退出；正常终止路径由 `exit` 请求或 EOF 触发。
+            match yoru_lsp::run_stdio() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("lsp: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("-h") | Some("--help") | Some("help") => {
             print_help();
             ExitCode::SUCCESS
@@ -194,7 +206,8 @@ fn main() -> ExitCode {
 /// help 成功请求 exit 0、未知命令 exit 2（clig.dev）。
 fn print_help() {
     eprintln!(
-        "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] [--stats] [--max-instructions=N] [--heap-mb=N] [--deadline-ms=N] <file.yoru|.yoruc>\n                                                      compile or direct-load LBC0, execute via T1 VM\n  yoru fmt [--check|-l | -w] <file.yoru>...           format source (stdout | in-place | check)\n  yoru doctest <file.md|.yoru|dir>...                 extract and verify embedded code blocks\n  yoru -h | --help                                    show this help\n  yoru --version"
+        "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] [--stats] [--max-instructions=N] [--heap-mb=N] [--deadline-ms=N] <file.yoru|.yoruc>\n                                                      compile or direct-load LBC0, execute via T1 VM\n  yoru fmt [--check|-l | -w] <file.yoru>...           format source (stdout | in-place | check)\n  yoru doctest <file.md|.yoru|dir>...                 extract and verify embedded code blocks\n  yoru -h | --help                                    show this help\n  yoru lsp                                             start language server (stdio JSON-RPC) for editor integration
+  yoru --version"
     );
 }
 

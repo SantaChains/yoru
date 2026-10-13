@@ -1,0 +1,17 @@
+[package]
+name = "yoru-lsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+yoru-syntax = { path = "../yoru-syntax" }
+yoru-typeck = { path = "../yoru-typeck" }
+yoru-fmt = { path = "../yoru-fmt" }
+yoru-stdlib = { path = "../yoru-stdlib" }
+
+[lints]
+workspace = true
