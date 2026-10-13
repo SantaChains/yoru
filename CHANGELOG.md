@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Added
+- **VM 取指热路径合并（2026-10-13，P1 首步，25 号 §A）**：step() 单次帧尾访问取 (proto, pc) 并推进 + `Frame.proto` 直存（省每条一次 Rc 解引用）。受控 A/B ~1%（严格减法保留）；同批证据裁决：Quickening 算术特化在当前负载形态下建模收益 ~1% 不抵架构成本，**诚实延后**（触发条件：算术密集负载 Add/Sub/Mul/Div 直方图占比 >25%）。
 - **struct 字段访问静态槽位表 + 懒名字（2026-10-13，P0b，25 号 §A）**：字段序由 struct 声明表静态决定，run 装载期预计算 `(struct_id, fid) → slot` 槽位表——GetField/SetField 快路径 O(log k) 二分 + fid 复核（防宿主构造值自对齐漂移），未命中回退线性扫描（语义逐位保留）。成功路径不再为错误信息做 String 堆分配（懒构造）。struct 密集负载（新增 benchmarks/structs）median **1441.1 → 936.7ms（-35%）**，checksum 逐位一致；sort 基准零字段操作（直方图实证），基线持平。
 
 ### Changed

@@ -87,6 +87,8 @@ pub struct Stats {
 /// 调用栈帧。
 struct Frame {
     closure: Rc<ClosureObj>,
+    /// 直存原型序号（P1 热路径）：取指每条都要 proto，直存省一次 Rc 解引用。
+    proto: u32,
     pc: usize,
     locals: Vec<Value>,
     /// Return 时栈截断基线（调用点弹参后的深度）
@@ -465,6 +467,7 @@ impl Vm {
                 }
                 self.stats.calls += 1;
                 self.frames.push(Frame {
+                    proto: c.proto,
                     closure: c,
                     pc: 0,
                     locals,
@@ -494,11 +497,7 @@ impl Vm {
     }
 
     fn cur_proto(&self) -> usize {
-        self.frames
-            .last()
-            .expect("step without frame")
-            .closure
-            .proto as usize
+        self.frames.last().expect("step without frame").proto as usize
     }
 
     fn cur_pc(&self) -> usize {
@@ -575,10 +574,16 @@ impl Vm {
             }
         }
 
-        let pc = self.cur_pc();
-        let proto = self.cur_proto();
+        // P1 热路径（2026-10-13）：单次 last_mut() 取 (proto, pc) 并推进——
+        // 取代此前 last()×2（cur_pc/cur_proto 各自 expect）+ last_mut() 三次
+        // Vec 尾访问；proto 直存 Frame（省每条一次 Rc 解引用）。
+        let (proto, pc) = {
+            let f = self.frames.last_mut().expect("frame");
+            let pc = f.pc;
+            f.pc += 1;
+            (f.proto as usize, pc)
+        };
         let instr: Instr = self.module_ref().protos[proto].code[pc];
-        self.frames.last_mut().expect("frame").pc += 1;
 
         // P0a①：直方图统计点——None 时是单个可预测分支，热路径零实质开销
         if let Some(h) = self.op_histogram.as_mut() {
