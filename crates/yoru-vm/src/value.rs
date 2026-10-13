@@ -255,17 +255,4 @@ impl Value {
             Value::Opaque(_) => "<host>".into(),
         }
     }
-
-    /// 近似堆占用（字节）——决策 72 的内存观测与 max_heap_bytes 限额共用。
-    /// 只计创建时的量级估算，Rc 共享不重复计（诚实边界：T1 为量级估算而非精确簿记）。
-    pub fn heap_estimate(&self) -> i64 {
-        match self {
-            Value::Str(s) => s.len() as i64,
-            Value::List(l) => l.borrow().capacity() as i64 * 16 + 32,
-            Value::Map(m) => m.borrow().capacity() as i64 * 32 + 32,
-            Value::Struct(s) => s.borrow().fields.len() as i64 * 16 + 32,
-            Value::Closure(c) => c.upvals.len() as i64 * 16 + 32,
-            _ => 0,
-        }
-    }
 }

@@ -223,11 +223,6 @@ impl Opcode {
             _ => OperandKind::None,
         }
     }
-
-    /// 指令是否终止基本块（不再 fallthrough）。
-    pub fn is_terminator(self) -> bool {
-        matches!(self, Opcode::Jmp | Opcode::Return | Opcode::Raise)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -26,14 +26,17 @@ mod tests;
 
 /// 管线阶段（Outcome 记录最远到达点 / panic 发生点）。
 /// 注意语义是「最远成功穿过」：Lex = parse 失败止步；Parse = parse 成功
-/// 但 typeck 失败；Typeck = typeck 成功但 lower 失败；Run = 全链完成。
-/// Lower 仅作 panic 发生点标记（lower 成功必然进入 run）。
+/// 但 typeck 失败；Run = 全链完成。typeck 过但 lower 拒 = `Diverged`
+/// （不折叠进 `Reached(Typeck)`，后者不可达）；Typeck/Lower 仅作 panic
+/// 发生点标记。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     /// lex（tokenize；gen 的种子 tokenize 亦走此面）
     Lex,
     Parse,
+    /// 仅 panic 发生点标记（typeck panic）
     Typeck,
+    /// 仅 panic 发生点标记（lower panic）
     Lower,
     Run,
 }
@@ -55,6 +58,10 @@ impl Stage {
 pub enum Outcome {
     /// 全链无 panic 完成。载荷 = 最远到达阶段（Lex = parse 失败止步）。
     Reached(Stage),
+    /// **双面分歧**（V1 对拍素材，30 号 §6.1）：typeck 通过但 lower 拒绝——
+    /// 静态契约（strict 健全承诺）与 lower 的结构闸不一致。非 panic（不违约），
+    /// 但每个 case 都应归档为 V1 对拍语料。
+    Diverged { src: String },
     /// 深度守卫/体量守卫拒绝，未进入管线（非缺陷，不计数）。
     Skipped,
     /// **契约命中**：panic 发生在某阶段。
@@ -114,7 +121,20 @@ pub fn fuzz_case(seed_src: &str, rng: &mut Rng) -> Outcome {
     if checked {
         let module = match catch_unwind(AssertUnwindSafe(|| yoru_bytecode::lower(&program))) {
             Ok(Ok(m)) => m,
-            Ok(Err(_)) => return Outcome::Reached(Stage::Typeck),
+            // typeck 过但 lower 拒 = 双面分歧（V1 素材）：归档源码供对拍
+            Ok(Err(diags)) => {
+                return Outcome::Diverged {
+                    src: format!(
+                        "// DIVERGED: typeck ok, lower rejected ({} diags)\n// codes: {}\n{src}",
+                        diags.len(),
+                        diags
+                            .iter()
+                            .filter_map(|d| d.code.as_deref())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                };
+            }
             Err(p) => {
                 return Outcome::Panicked {
                     stage: Stage::Lower,

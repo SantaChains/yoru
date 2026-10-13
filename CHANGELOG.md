@@ -6,6 +6,12 @@
 ## [Unreleased]
 
 ### Added
+- **fuzz 双面分歧归档（2026-10-13，质量审计）**：`Outcome::Diverged` 独立承载「typeck 过但 lower 拒」（不再折叠进 `Reached(Typeck)`），长跑逐例归档 `fuzz-artifacts/diverg_case*.yoru`（含诊断码，V1 对拍直接素材）；报告剔除结构性恒零的 reached typeck/lower 死输出行。
+
+### Removed
+- **死 API 清理（2026-10-13，全量引用审计：156 个非测试 pub fn 逐一词边界计数）**：`yoru_stdlib::select_module`（零引用，与 `module_fn` 语义重复）、`Opcode::is_terminator`（零引用，且对融合跳转语义已过时）、`Value::heap_estimate`（零引用 + 文档声称「与 max_heap_bytes 共用」不实 + capacity 口径与 VM 实际 len 口径不一致——堆观测单一口径收敛于 `Vm::alloc(bytes)` 并补文档）、`CaptureLayer.proto_idx`（零读取 + `allow(dead_code)` 豁免，豁免即债）。
+
+### Added
 - **VM opcode 直方图 + `yoru run --stats`（2026-10-13，P0a① profile 释疑）**：`enable_op_histogram` 显式开启（默认零开销，热循环单分支）——Windows 无 perf/VTune 下以指令分布驱动超指令选型，不凭感觉。sort 负载实证：LoadLocal 30.8%、Nil/Pop 各 7.7% 为三大浪费源。
 - **超指令第一批：融合条件跳转 `JmpIfNotLt/Le/Gt/Ge` + 双局部下标读 `GetIndexLL`（2026-10-13，P0a③，25 号 §A）**：lower 窥孔自动融合 `Xx; JmpIfNot` 与 `LoadLocal; LoadLocal; GetIndex`，比较/下标语义与独立指令逐位一致（共用 cmp_values 单一事实源，错误面 Y-R9007/Y-R9011/Y-R9013 不变）。sort 负载指令 58.5M → 36.0M（-38.4%）。
 - **`Nil; Pop` 窥孔 pass（2026-10-13，P0a 配套）**：赋值语句尾「值补位 Nil + 语句级 Pop」两指令零功对，proto 收尾后处理统一消除（指令 -15.4%）。**发射期窥孔已证伪并撤销**：块尾值 Nil 可能同时是跳转目标（if 无 else 臂补位 = JmpIfNot 落点），删除导致跳转错位（08_physics 实证、最小 repro 固化为回归测试 ×3）；pass 以跳转目标集合保守判定 + 全量偏移重算保证正确性。

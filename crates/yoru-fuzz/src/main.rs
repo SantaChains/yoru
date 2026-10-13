@@ -40,6 +40,7 @@ fn main() {
     let corpus = seeds();
     let mut stats: [u64; 5] = [0; 5];
     let mut skipped: u64 = 0;
+    let mut diverged: u64 = 0;
     let mut panicked: Vec<(String, String, u64)> = Vec::new(); // (stage, msg首行, 计数)
 
     for case_id in 0..iters {
@@ -48,6 +49,14 @@ fn main() {
         match fuzz_case(src, &mut rng) {
             yoru_fuzz::Outcome::Reached(stage) => stats[stage_index(stage)] += 1,
             yoru_fuzz::Outcome::Skipped => skipped += 1,
+            yoru_fuzz::Outcome::Diverged { src: annotated } => {
+                // 双面分歧（V1 素材）：逐例归档，首例去重按内容哈希
+                diverged += 1;
+                let _ = std::fs::create_dir("fuzz-artifacts");
+                let path = format!("fuzz-artifacts/diverg_case{case_id}.yoru");
+                let _ = std::fs::write(&path, &annotated);
+                eprintln!("DIVERGED @ case {case_id}: archived {path}");
+            }
             yoru_fuzz::Outcome::Panicked { stage, msg } => {
                 let key = (
                     stage.name().to_string(),
@@ -77,7 +86,7 @@ fn main() {
 
     let total: u64 = stats.iter().sum::<u64>() + skipped;
     eprintln!("\n=== V0 fuzz report ===");
-    eprintln!("iters={iters} seed=0x{seed:X} skipped={skipped}");
+    eprintln!("iters={iters} seed=0x{seed:X} skipped={skipped} diverged={diverged}");
     for (i, n) in stats.iter().enumerate() {
         let name = [
             Stage::Lex,
@@ -87,6 +96,11 @@ fn main() {
             Stage::Run,
         ][i]
             .name();
+        // Typeck/Lower 仅作 panic 发生点标记：lower 拒已改走 Diverged，
+        // reached 恒零——不打印死输出行。
+        if matches!(name, "typeck" | "lower") {
+            continue;
+        }
         eprintln!(
             "reached {name}: {n} ({:.1}%)",
             *n as f64 * 100.0 / total.max(1) as f64

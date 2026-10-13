@@ -12,23 +12,35 @@ fn v0_panic_free_smoke() {
     let base_seed = 0x5EED_2026_1013u64;
     let mut failures = Vec::new();
     let mut reached: std::collections::HashMap<&'static str, u64> = Default::default();
+    let mut diverged = 0u64;
     for case_id in 0..800u64 {
         let src = corpus[(case_id as usize) % corpus.len()];
         let mut rng = Rng::new(base_seed ^ case_id.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         match fuzz_case(src, &mut rng) {
             Outcome::Reached(stage) => *reached.entry(stage.name()).or_insert(0) += 1,
             Outcome::Skipped => {}
+            // 双面分歧（typeck 过但 lower 拒）：非 panic 不违约，计数可见即可
+            Outcome::Diverged { .. } => diverged += 1,
             Outcome::Panicked { stage, msg } => failures.push((case_id, stage.name(), msg)),
         }
     }
     // 覆盖健康度：lex/parse/run 三关键点必须非零（parse = typeck 失败路径，
-    // run = 全链；typeck 阶段 = lower 失败——实证其恒零：typeck 过则 lower
-    // 从不失败，故不作断言）。全零说明变异器或 harness 失效。
+    // run = 全链）。全零说明变异器或 harness 失效。
+    // 诚实注记（2026-10-13 修正）：早前注释声称「typeck 过则 lower 从不失败，
+    // Typeck 阶段恒零」——已被 fuzz 长跑实证推翻（10 例双面分歧，typeck 过但
+    // lower 拒）。分歧是合法 Outcome（非 panic），由 Diverged 分支计数承载。
     for stage in ["lex", "parse", "run"] {
         let n = reached.get(stage).copied().unwrap_or(0);
         assert!(
             n > 0,
             "stage {stage} never reached — harness coverage broken: {reached:?}"
+        );
+    }
+    // 双面分歧是合法 Outcome：不做失败断言，只保证计数被消费可见
+    // （长跑 main 侧逐例归档 fuzz-artifacts/diverg_*.yoru 供 V1 对拍）。
+    if diverged > 0 {
+        eprintln!(
+            "v0_smoke: {diverged} diverged cases (typeck ok, lower rejected) — legal, see long-run artifacts"
         );
     }
     if !failures.is_empty() {

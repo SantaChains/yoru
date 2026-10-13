@@ -1410,6 +1410,10 @@ impl Vm {
         }
     }
 
+    /// 堆账本记账（决策 71/72）：bytes 由各创建点按**创建时量级**估算
+    /// （List/Map/Struct/Closure ×(元素数×槽宽)+对象头，Str=len）——这是堆
+    /// 观测与 max_heap_bytes 限额的**唯一口径**（诚实边界：量级估算而非精确
+    /// 簿记，Rc 共享不重复计）。Value 侧不再提供平行估算 API，避免口径漂移。
     fn alloc(&mut self, bytes: i64) -> Result<(), VmError> {
         self.heap_bytes += bytes;
         self.stats.heap_bytes = self.heap_bytes;

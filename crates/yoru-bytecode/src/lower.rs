@@ -124,8 +124,6 @@ struct Lowerer {
 /// 闭包捕获层（Lua 式 upvalue 链）。
 #[derive(Clone)]
 struct CaptureLayer {
-    #[allow(dead_code)]
-    proto_idx: usize,
     /// 本层局部名 → 槽
     locals: Vec<(String, u16)>,
     /// 本层已捕获名 → (本层 upvalue 序号, 来自父层的描述)
@@ -426,7 +424,6 @@ impl Lowerer {
             nslots: 0, // 参数由 declare_local 从 0 号槽分配
             loops: Vec::new(),
             captures: vec![CaptureLayer {
-                proto_idx,
                 locals: Vec::new(),
                 upvals: Vec::new(),
             }],
@@ -1105,7 +1102,6 @@ impl Lowerer {
         let mut outer = self.cur.take().expect("lambda outside fn");
         let mut captures = std::mem::take(&mut outer.captures);
         captures.push(CaptureLayer {
-            proto_idx: pi,
             locals: Vec::new(),
             upvals: Vec::new(),
         });

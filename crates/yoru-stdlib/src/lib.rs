@@ -372,13 +372,6 @@ pub fn select_free(name: &str, argc: usize) -> Option<&'static Builtin> {
         .find(|b| b.accepts_argc(argc))
 }
 
-/// 模块限定函数选层（`math.sqrt` → bare 名同一分派约定）。
-pub fn select_module(module: &str, field: &str, argc: usize) -> Option<&'static Builtin> {
-    BUILTINS
-        .iter()
-        .find(|b| b.module == Some(module) && b.name == field && b.accepts_argc(argc))
-}
-
 /// 模块限定函数（不限元数）——lower 的限定调用归一用。
 pub fn module_fn(module: &str, field: &str) -> Option<&'static Builtin> {
     BUILTINS
