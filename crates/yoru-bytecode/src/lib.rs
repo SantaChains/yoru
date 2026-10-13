@@ -369,19 +369,13 @@ mod registry_tests {
     use super::*;
     use yoru_syntax::parse_source;
 
-    /// 决策 77 对账：lower 的 BUILTIN_FNS 镜像 == 注册表 bare 名集合。
-    /// 名单漂移（漏注册/幽灵名）在此处失败。
-    #[test]
-    fn builtin_fns_mirror_locked() {
-        let mut mirror: Vec<&str> = BUILTIN_FNS.to_vec();
-        mirror.sort_unstable();
-        let mut reg = yoru_stdlib::builtin_names();
-        reg.sort_unstable();
-        assert_eq!(mirror, reg, "BUILTIN_FNS 与注册表漂移");
-    }
-
     /// 决策 77：模块限定调用在 lower 归一为 bare 内建名——
     /// `string.to_runes(s)` 发射 Const(Str("to_runes"))，不再有 LoadImport/GetField。
+    //
+    // （2026-10-13 撤销）旧对账测试 builtin_fns_mirror_locked：BUILTIN_FNS 已
+    // 派生化（LazyLock 派生自 yoru_stdlib::builtin_names()，31b8908）——
+    // 镜像 == 注册表由构造保证，对账退化为同义反复。真正的对账面在 VM 侧
+    // registry_dispatch_reconciled（注册表每个名字都有分派臂）。
     #[test]
     fn module_qualified_call_normalized() {
         let src = "import string from \"std\"\n\nfn f(s: string) -> int {\n    return len(string.to_runes(s))\n}\n";
