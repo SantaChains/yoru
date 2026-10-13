@@ -6,6 +6,13 @@
 ## [Unreleased]
 
 ### Added
+- **`yoru run` 停机安全三旋钮（2026-10-13，25 号 §4-c）**：`--max-instructions=N` / `--heap-mb=N` / `--deadline-ms=N`——「跑别人给的脚本」场景的收紧（沙箱化）与放宽（重负载）均可表达（默认写死 1 亿指令 + 64 MiB 堆不可调）；解析失败 = 用法错误 exit 2。e2e 实证：死循环脚本分别以 Instructions / Deadline / HeapBytes 优雅停机（exit 1），坏值 exit 2。
+- **S 线稳定性与极限压测（2026-10-13，25 号 §4-c，测试 +6）**：①长跑确定性（200k 迭代 >1M 指令，双 VM 逐位同结果 + 指令数一致）；②停机时延量化界（钩子第 k 次触发时 instructions ≤ k·check_interval + 1）；③极值算术矩阵（MIN±1 / MIN×-1 / MIN÷-1 / MIN%-1 / -MIN 全部结构化 Y-R9001，debug 构建零 panic 面）；④退化输入（空源/仅注释/缺 main → 结构化 Y-R9000）；⑤无界增长（循环字符串拼接 → 堆限逐次拦截）。
+
+### Fixed
+- **const 折叠语义分叉（2026-10-13，决策 44 透明性）**：`fold_const` 原用截断 `checked_div/checked_rem`，与 VM 运行时 floor 语义（`div_euclid/rem_euclid`）分叉——同一表达式 const 声明与 let 赋值结果不同（`(0-7)/3`：折叠 -2 vs 运行时 -3；`(0-7)%3`：-1 vs 2，红证实锤）。修复为 `checked_div_euclid/checked_rem_euclid`，回归测试锁定 const 折叠与运行时逐位一致。
+
+### Added
 - **中断节流倒数计数器（2026-10-13，数学验证 + 多源调研批次）**：热路径 `instructions % check_interval`（运行时变量 64 位 div ~25 cycles/条，非二次幂不可强度削减）→ 倒数计数器（dec+cmp ~1 cycle），触发点逐位等价（第 k·interval 条）；`max(1,·)` 消除 interval=0 除零 panic 面。实测 sort median 540-567 → 496.6ms（**-8~9%**），checksum 逐位一致。max_instructions 保留每条精确检查（上界语义不弱化）。
 - **激进优化三线调研取舍档（25 号 §4-b）**：computed goto/tail-call threading（Rust 稳定下 match≈computed goto，nightly 拒绝）；copy-and-patch stencils（CPython 三年 5-6%，登记远期）；GPU 后端 NVRTC/PTX/persistent kernel（launch 税 ~5μs + 嵌入可移植性铁律冲突，登记远期可选后端）。
 

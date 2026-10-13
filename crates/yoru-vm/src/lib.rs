@@ -2112,6 +2112,155 @@ mod tests {
         assert!(Value::List(a.clone()).deep_eq(&Value::List(a.clone())));
     }
 
+    // ---- S 线：长期运行稳定性 / 停机界 / 极限压测（25 号 §4-c）----
+
+    #[test]
+    fn long_run_deterministic_checksum() {
+        // 长跑稳定性双契约：①百万级指令不间断运行无 panic/无状态劣化；
+        // ②确定性——独立 VM 同输入逐位同结果且指令数一致（调度透明）。
+        let src = "pub fn main() -> int {\n    let mut h = 0\n    let mut i = 0\n    while i < 200_000 {\n        h = (h * 31 + i % 97) % 1_000_000_007\n        i = i + 1\n    }\n    return h\n}\n";
+        let mut vm1 = Vm::new();
+        let mut vm2 = Vm::new();
+        let v1 = vm1.run(compile(src), None, vec![]).expect("run 1");
+        let v2 = vm2.run(compile(src), None, vec![]).expect("run 2");
+        assert!(v1.deep_eq(&v2), "长跑结果逐位一致");
+        let s1 = vm1.stats();
+        let s2 = vm2.stats();
+        assert_eq!(s1.instructions, s2.instructions, "确定性：指令数一致");
+        assert!(
+            s1.instructions > 1_000_000,
+            "压测规模须达百万级指令，实际 {}",
+            s1.instructions
+        );
+    }
+
+    #[test]
+    fn interrupt_latency_bounded() {
+        // 停机保证的量化界：钩子返回 true 后立即终止——停止点距最后一次
+        // 检查 ≤ check_interval 条指令（倒数计数器实现的触发点契约）。
+        let interval: u64 = 64;
+        let fires_to_stop: u32 = 8;
+        // Rc<Cell>：Cell::clone 是值拷贝而非共享（探针实证 fire#8 instr=512
+        // 而 stopped_at 仍 0）——共享观测必须走 Rc。
+        let stopped_at = std::rc::Rc::new(std::cell::Cell::new(0u64));
+        let seen = stopped_at.clone();
+        let mut vm = Vm::new();
+        vm.set_limits(Limits {
+            check_interval: interval,
+            ..Limits::default()
+        });
+        let mut fires = 0u32;
+        vm.set_interrupt(Box::new(move |s: &Stats| {
+            fires += 1;
+            seen.set(s.instructions);
+            fires >= fires_to_stop
+        }));
+        let err = vm
+            .run(
+                compile("pub fn main() {\n    let mut i = 0\n    while true { i = i + 1 }\n}\n"),
+                None,
+                vec![],
+            )
+            .unwrap_err();
+        assert!(matches!(err, VmError::Interrupted));
+        // 检查点每 interval 条出现一次：第 8 次触发时指令数上界 = 8*interval + 1
+        assert!(
+            stopped_at.get() <= fires_to_stop as u64 * interval + 1,
+            "停机时延越界：stopped at {} (bound {})",
+            stopped_at.get(),
+            fires_to_stop as u64 * interval + 1
+        );
+        assert!(stopped_at.get() > 0, "必须真实执行后停机");
+    }
+
+    #[test]
+    fn arithmetic_extreme_edge_matrix() {
+        // i64 极值矩阵：全部结构化 Y-R9001，绝不 panic（checked 语义面全覆盖：
+        // Add/Sub/Mul/Div/Mod/Neg 六算子的 MIN 边界；MIN/-1 与 MIN%-1 是
+        // debug 构建的经典 panic 面，必须由 checked_* 拦截为运行时错误）。
+        let cases: [(&str, &str); 5] = [
+            ("sub: MIN-1", "return 0 - 9223372036854775807 - 2"),
+            (
+                "mul: MIN*-1",
+                "return (0 - 9223372036854775807 - 1) * (0 - 1)",
+            ),
+            (
+                "div: MIN/-1",
+                "return (0 - 9223372036854775807 - 1) / (0 - 1)",
+            ),
+            (
+                "mod: MIN%-1",
+                "return (0 - 9223372036854775807 - 1) % (0 - 1)",
+            ),
+            (
+                "neg: -MIN",
+                "let x = 0 - 9223372036854775807 - 1\n    return -x",
+            ),
+        ];
+        for (label, body) in cases {
+            let src = format!("pub fn main() -> int {{\n    {body}\n}}\n");
+            let err = run_src(&src).unwrap_err();
+            let VmError::Runtime(e) = err else {
+                panic!("{label}: expected runtime error")
+            };
+            assert_eq!(e.code, "Y-R9001", "{label}: {}", e.message);
+        }
+    }
+
+    #[test]
+    fn degenerate_programs_fail_structured() {
+        // 退化输入（空源 / 仅注释 / 缺 main）：全链结构化 Y-R9000，不 panic
+        //——「跑别人给的脚本」的第一道冲击面。
+        for src in [
+            "",
+            "// only a comment\n",
+            "fn helper() -> int {\n    return 1\n}\n",
+        ] {
+            let err = run_src(src).unwrap_err();
+            let VmError::Runtime(e) = err else {
+                panic!("degenerate {src:?}: expected structured error")
+            };
+            assert_eq!(e.code, "Y-R9000", "degenerate {src:?}: {}", e.message);
+        }
+    }
+
+    #[test]
+    fn unbounded_string_growth_hits_heap_limit() {
+        // 循环内持续分配：堆计账逐次检查（决策 72），触限即优雅停机。
+        // 指令预算同时上保险：若堆检查失效，以 Instructions 而非死循环告终。
+        let mut vm = Vm::new();
+        vm.set_limits(Limits {
+            max_heap_bytes: 1024 * 1024,
+            max_instructions: 2_000_000,
+            ..Limits::default()
+        });
+        let err = vm
+            .run(
+                compile(
+                    "pub fn main() -> string {\n    let mut s = \"x\"\n    let mut i = 0\n    while i < 100_000 {\n        s = s + \"0123456789012345678901234567890123456789\"\n        i = i + 1\n    }\n    return s\n}\n",
+                ),
+                None,
+                vec![],
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, VmError::Limit(LimitKind::HeapBytes)),
+            "增长分配必须由堆限拦截，实际 {err:?}"
+        );
+    }
+
+    #[test]
+    fn const_fold_matches_runtime_semantics() {
+        // 决策 44 一致性：同一表达式经 const 折叠与运行时求值结果必须逐位
+        // 一致（floor 语义单一事实源在 VM——fold_const 用 checked_div_euclid /
+        // checked_rem_euclid 对齐）。修复前 fold 用截断 checked_div/checked_rem，
+        // 负被除数时 const 声明与 let 赋值结果分叉（-2 vs -3）。
+        let src = "const CFOLD: int = (0 - 7) / 3\nconst MFOLD: int = (0 - 7) % 3\npub fn main() -> string {\n    let d = (0 - 7) / 3\n    let m = (0 - 7) % 3\n    return \"${CFOLD == d}/${MFOLD == m}\"\n}\n";
+        let v = run_src(src).expect("run");
+        let Value::Str(s) = v else { panic!("string") };
+        assert_eq!(&*s, "true/true", "const 折叠必须与运行时语义一致");
+    }
+
     // ---- 负面：strip 模块 assert 为 no-op（决策 70）----
 
     #[test]

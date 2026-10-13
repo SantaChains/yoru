@@ -64,12 +64,38 @@ fn main() -> ExitCode {
             let mut host_demo = false;
             let mut entry: Option<String> = None;
             let mut show_stats = false;
+            let mut bounds = RunBounds::default();
             for a in &args[2..] {
                 match a.as_str() {
                     "--host=demo" | "--host" => host_demo = true,
                     "--stats" => show_stats = true,
                     s if s.starts_with("--entry=") => {
                         entry = Some(s["--entry=".len()..].to_string())
+                    }
+                    // 停机安全三旋钮（决策 71 CLI 面）：默认写死 1 亿指令 +
+                    // 64 MiB 堆对「跑别人给的脚本」场景不可调——收紧（沙箱化）
+                    // 与放宽（重负载）都必须可表达；解析失败 = 用法错误 exit 2。
+                    s if s.starts_with("--max-instructions=") => {
+                        bounds.max_instructions = parse_flag_value(
+                            "--max-instructions",
+                            &s["--max-instructions=".len()..],
+                        );
+                        if bounds.max_instructions.is_none() {
+                            return ExitCode::from(2);
+                        }
+                    }
+                    s if s.starts_with("--heap-mb=") => {
+                        bounds.heap_mb = parse_flag_value("--heap-mb", &s["--heap-mb=".len()..]);
+                        if bounds.heap_mb.is_none() {
+                            return ExitCode::from(2);
+                        }
+                    }
+                    s if s.starts_with("--deadline-ms=") => {
+                        bounds.deadline_ms =
+                            parse_flag_value("--deadline-ms", &s["--deadline-ms=".len()..]);
+                        if bounds.deadline_ms.is_none() {
+                            return ExitCode::from(2);
+                        }
                     }
                     s if !s.starts_with('-') => path = Some(s.to_string()),
                     s => {
@@ -79,9 +105,11 @@ fn main() -> ExitCode {
                 }
             }
             match path {
-                Some(p) => run(&p, host_demo, entry.as_deref(), show_stats),
+                Some(p) => run(&p, host_demo, entry.as_deref(), show_stats, &bounds),
                 None => {
-                    eprintln!("usage: yoru run [--host=demo] [--entry=F] [--stats] <file.yoru>");
+                    eprintln!(
+                        "usage: yoru run [--host=demo] [--entry=F] [--stats] [--max-instructions=N] [--heap-mb=N] [--deadline-ms=N] <file.yoru>"
+                    );
                     ExitCode::from(2)
                 }
             }
@@ -150,8 +178,27 @@ fn main() -> ExitCode {
 /// help 成功请求 exit 0、未知命令 exit 2（clig.dev）。
 fn print_help() {
     eprintln!(
-        "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] [--stats] <file.yoru>  compile + execute via T1 VM\n  yoru fmt [--check|-l | -w] <file.yoru>...           format source (stdout | in-place | check)\n  yoru doctest <file.md|.yoru|dir>...                 extract and verify embedded code blocks\n  yoru -h | --help                                    show this help\n  yoru --version"
+        "yoru — AI-native embedded language\n\nusage:\n  yoru check [--host=demo] <file.yoru>                 parse + typecheck, report diagnostics\n  yoru build [--host=demo] [--out=F] <file.yoru>      compile to LBC0 (.yoruc)\n  yoru run [--host=demo] [--entry=F] [--stats] [--max-instructions=N] [--heap-mb=N] [--deadline-ms=N] <file.yoru>\n                                                      compile + execute via T1 VM (resource bounds)\n  yoru fmt [--check|-l | -w] <file.yoru>...           format source (stdout | in-place | check)\n  yoru doctest <file.md|.yoru|dir>...                 extract and verify embedded code blocks\n  yoru -h | --help                                    show this help\n  yoru --version"
     );
+}
+
+/// `yoru run` 停机安全三旋钮（决策 71 的 CLI 面）：None = 沿用 VM 默认。
+#[derive(Default)]
+struct RunBounds {
+    max_instructions: Option<u64>,
+    heap_mb: Option<i64>,
+    deadline_ms: Option<u64>,
+}
+
+/// flag 带值解析（统一口径：非数值 = 用法错误，由调用方 exit 2）。
+fn parse_flag_value<T: std::str::FromStr>(flag: &str, raw: &str) -> Option<T> {
+    match raw.parse::<T>() {
+        Ok(v) => Some(v),
+        Err(_) => {
+            eprintln!("error: {flag} expects a number, got `{raw}`");
+            None
+        }
+    }
 }
 
 /// 格式化（F2）。语义不变性由 yoru-fmt 的 D3 双断言 + 幂等验收协议在
@@ -274,7 +321,13 @@ fn build(path: &str, host_demo: bool, out: Option<&str>) -> ExitCode {
     }
 }
 
-fn run(path: &str, host_demo: bool, entry: Option<&str>, show_stats: bool) -> ExitCode {
+fn run(
+    path: &str,
+    host_demo: bool,
+    entry: Option<&str>,
+    show_stats: bool,
+    bounds: &RunBounds,
+) -> ExitCode {
     let module = match compile_to_module(path, host_demo) {
         Ok(m) => m,
         Err(code) => return code,
@@ -284,6 +337,18 @@ fn run(path: &str, host_demo: bool, entry: Option<&str>, show_stats: bool) -> Ex
         yoru_vm::demo::install_demo_host(&mut inst);
     }
     let mut vm = yoru_vm::Vm::new();
+    // 停机安全三旋钮接线（决策 71）：三限独立可调；deadline 作用于本次 run。
+    let mut limits = yoru_vm::Limits::default();
+    if let Some(n) = bounds.max_instructions {
+        limits.max_instructions = n;
+    }
+    if let Some(mb) = bounds.heap_mb {
+        limits.max_heap_bytes = mb.saturating_mul(1024 * 1024);
+    }
+    vm.set_limits(limits);
+    if let Some(ms) = bounds.deadline_ms {
+        vm.set_deadline(std::time::Instant::now() + std::time::Duration::from_millis(ms));
+    }
     if show_stats {
         vm.enable_op_histogram();
     }

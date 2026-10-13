@@ -1939,8 +1939,11 @@ impl Lowerer {
                         ast::BinOp::Add => a.checked_add(b).map(Const::Int),
                         ast::BinOp::Sub => a.checked_sub(b).map(Const::Int),
                         ast::BinOp::Mul => a.checked_mul(b).map(Const::Int),
-                        ast::BinOp::Div if b != 0 => a.checked_div(b).map(Const::Int),
-                        ast::BinOp::Mod if b != 0 => a.checked_rem(b).map(Const::Int),
+                        // 决策 44 单一事实源在 VM：Div/Mod 必须 euclid（floor）
+                        // 语义，与运行时 checked_div_euclid/checked_rem_euclid
+                        // 逐位一致——const 折叠透明性（S 线回归测试锁定）。
+                        ast::BinOp::Div if b != 0 => a.checked_div_euclid(b).map(Const::Int),
+                        ast::BinOp::Mod if b != 0 => a.checked_rem_euclid(b).map(Const::Int),
                         _ => None,
                     },
                     (Const::Float(a), Const::Float(b)) => match op {
