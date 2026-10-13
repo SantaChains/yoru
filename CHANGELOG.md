@@ -5,13 +5,14 @@
 
 ## [Unreleased]
 
+### Added
+- **struct 字段访问静态槽位表 + 懒名字（2026-10-13，P0b，25 号 §A）**：字段序由 struct 声明表静态决定，run 装载期预计算 `(struct_id, fid) → slot` 槽位表——GetField/SetField 快路径 O(log k) 二分 + fid 复核（防宿主构造值自对齐漂移），未命中回退线性扫描（语义逐位保留）。成功路径不再为错误信息做 String 堆分配（懒构造）。struct 密集负载（新增 benchmarks/structs）median **1441.1 → 936.7ms（-35%）**，checksum 逐位一致；sort 基准零字段操作（直方图实证），基线持平。
+
 ### Changed
 - **CLI flag 输入域收紧（2026-10-13，质量审计）**：`--heap-mb` 数值域改 u64——负值原会流入限额逻辑产生「一切分配静默失败」的荒谬状态，现解析层即拒绝（exit 2）；巨值饱和转换（实际无限，语义保真）。`--entry=`/`--out=` 空值解析层拒绝（空名永远非法、空路径只会产出不可读写错误）——fail-fast 优于运行时结构化错误。`.yoruc` 构建产物入 `.gitignore`（可由 build 再生，不入库）。
 
 ### Added
 - **`yoru run` LBC0 直载（2026-10-13，P0a④，25 号 §A）**：`yoru run foo.yoruc` 跳过前端全链（parse/typeck/lower）直入 VM——`build` + `run` 构成产物分发闭环。真实性/合法性双闸：deserialize 把关 magic/version/CRC32，verify_module 坚持 validate-before-use（不豁免自产字节码）；坏产物结构化拒绝 exit 1。`check`/`build` 误入 `.yoruc` 给诚实指引（替代 UTF-8 解码噪音）。e2e：sort 与 std-import 模块直载输出逐位一致；`--entry`/`--host`/`--stats`/停机三旋钮全部可用。启动实测：tiny min 36.6→28.9ms（-21%，地板 = 进程孵化 ~28ms）；原「32→16ms」预测证伪（小模块前端仅 0-5ms），真实收益面在嵌入进程内加载与大模块分发。
-
-### Added
 - **`yoru run` 停机安全三旋钮（2026-10-13，25 号 §4-c）**：`--max-instructions=N` / `--heap-mb=N` / `--deadline-ms=N`——「跑别人给的脚本」场景的收紧（沙箱化）与放宽（重负载）均可表达（默认写死 1 亿指令 + 64 MiB 堆不可调）；解析失败 = 用法错误 exit 2。e2e 实证：死循环脚本分别以 Instructions / Deadline / HeapBytes 优雅停机（exit 1），坏值 exit 2。
 - **S 线稳定性与极限压测（2026-10-13，25 号 §4-c，测试 +6）**：①长跑确定性（200k 迭代 >1M 指令，双 VM 逐位同结果 + 指令数一致）；②停机时延量化界（钩子第 k 次触发时 instructions ≤ k·check_interval + 1）；③极值算术矩阵（MIN±1 / MIN×-1 / MIN÷-1 / MIN%-1 / -MIN 全部结构化 Y-R9001，debug 构建零 panic 面）；④退化输入（空源/仅注释/缺 main → 结构化 Y-R9000）；⑤无界增长（循环字符串拼接 → 堆限逐次拦截）。
 

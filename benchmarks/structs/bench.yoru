@@ -1,0 +1,25 @@
+// P0b 结构体字段访问微基准（2026-10-13）
+// 运行：yoru run benchmarks/structs/bench.yoru
+// 每迭代 ~12 次字段操作（6 读 + 3 展开 SETFIELD + 3 写），100 万迭代。
+// 用途：GetField/SetField 路径优化的 A/B 依据（sort 基准不含 struct）。
+
+struct P {
+    x: int
+    y: int
+    z: int
+}
+
+fn step(p: P) -> P {
+    // z 恒定：x/y 线性增长——acc 1M 迭代 ~1.7e17，i64 内（二次增长会 Y-R9001）
+    return P { ..p, x: p.x + p.y, y: p.y + p.z, z: p.z }
+}
+
+pub fn main() -> int {
+    let mut p = P { x: 0, y: 1, z: 2 }
+    let mut acc = 0
+    for _ in range(0, 1000000) {
+        acc = acc + p.x + p.y + p.z
+        p = step(p)
+    }
+    return acc
+}

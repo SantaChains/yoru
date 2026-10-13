@@ -169,6 +169,13 @@ pub struct Vm {
     host_fns: HashMap<String, HostFn>,
     result_tag: Option<u32>,
     fid_of_str: HashMap<u32, u32>,
+    /// P0b 静态槽位表（2026-10-13）：`struct_slots[struct_id]` = (fid, slot)
+    /// 按 fid 升序——字段序由 struct 声明表静态决定（NEWSTRUCT 按表序对齐），
+    /// 故 (struct_id, fid) → slot 是纯静态事实，run 装载时一次性预计算。
+    /// GetField/SetField 快路径 O(log k) 二分 + fid 复核，取代每次对
+    /// Vec<(u32, Value)> 胖对齐的线性扫描；无失效、无站点存储、天然多态
+    /// （按 struct_id 分桶而非按站点——同一站点多 struct 类型亦精确）。
+    struct_slots: Vec<Box<[(u32, u32)]>>,
     debug: DebugInfo,
     // ---- 执行状态 ----
     frames: Vec<Frame>,
@@ -221,6 +228,7 @@ impl Vm {
             // max(1,·)：check_interval=0 在取模实现下是除零 panic 面，
             // 倒数实现下按「每次检查」收敛为 1——不 panic（安全边界）。
             check_countdown: Limits::default().check_interval.max(1),
+            struct_slots: Vec::new(),
         }
     }
 
@@ -403,6 +411,8 @@ impl Vm {
         self.imports = inst.imports;
         self.result_tag = inst.result_tag;
         self.fid_of_str = inst.fid_of_str;
+        // P0b：槽位表随 run 作用域重建（Vm 跨实例复用，模块可能更换）
+        self.struct_slots = Self::build_struct_slots(&inst.module, &self.fid_of_str);
         self.debug = DebugInfo::from_module(&inst.module).unwrap_or_default();
         self.frames.clear();
         self.stack.clear();
@@ -881,25 +891,40 @@ impl Vm {
             // ---- 对象 ----
             Opcode::GetField => {
                 let base = self.pop();
-                let name = self.field_name(instr.arg)?;
                 let v = match base {
                     Value::Struct(s) => {
                         let s = s.borrow();
-                        s.fields
-                            .iter()
-                            .find(|(f, _)| *f == instr.arg)
-                            .map(|(_, v)| v.clone())
-                            .ok_or_else(|| {
-                                self.rerr("Y-R9012", format!("struct has no field `{name}`"))
-                            })?
+                        // P0b：名字懒构造——成功路径零 String 分配（此前
+                        // field_name() 每次调用 format! 堆分配，纯为错误
+                        // 路径服务）。槽位快路径 + fid 复核（防宿主构造值
+                        // 自对齐漂移），未命中回退线性扫描，语义逐位保留。
+                        match self.struct_slot(s.struct_id, instr.arg) {
+                            Some(i)
+                                if (i as usize) < s.fields.len()
+                                    && s.fields[i as usize].0 == instr.arg =>
+                            {
+                                s.fields[i as usize].1.clone()
+                            }
+                            _ => match s.fields.iter().find(|(f, _)| *f == instr.arg) {
+                                Some((_, v)) => v.clone(),
+                                None => {
+                                    let name = self.field_name(instr.arg)?;
+                                    return Err(self
+                                        .rerr("Y-R9012", format!("struct has no field `{name}`")));
+                                }
+                            },
+                        }
                     }
-                    Value::Map(m) => m
-                        .borrow()
-                        .iter()
-                        .find(|(k, _)| matches!(k, Value::Str(s) if **s == name))
-                        .map(|(_, v)| v.clone())
-                        .unwrap_or(Value::Nil),
+                    Value::Map(m) => {
+                        let name = self.field_name(instr.arg)?;
+                        m.borrow()
+                            .iter()
+                            .find(|(k, _)| matches!(k, Value::Str(s) if **s == name))
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or(Value::Nil)
+                    }
                     other => {
+                        let name = self.field_name(instr.arg)?;
                         return Err(self.rerr(
                             "Y-R9012",
                             format!("cannot access field `{name}` on {}", other.display()),
@@ -911,15 +936,19 @@ impl Vm {
             Opcode::SetField => {
                 let value = self.pop();
                 let container = self.pop();
-                let name = self.field_name(instr.arg)?;
                 let out = match container {
                     Value::Struct(s) => self.with_struct_mut(s, instr.arg, value)?,
-                    Value::Map(m) => Value::Map(self.with_map_mut(
-                        m,
-                        Value::Str(Rc::from(name.as_str())),
-                        value,
-                    )?),
+                    Value::Map(m) => {
+                        // 名字懒构造（同 GetField）：Map 分支才付 String 代价
+                        let name = self.field_name(instr.arg)?;
+                        Value::Map(self.with_map_mut(
+                            m,
+                            Value::Str(Rc::from(name.as_str())),
+                            value,
+                        )?)
+                    }
                     other => {
+                        let name = self.field_name(instr.arg)?;
                         return Err(self.rerr(
                             "Y-R9012",
                             format!("cannot set field `{name}` on {}", other.display()),
@@ -1403,6 +1432,38 @@ impl Vm {
         Value::Str(Rc::from(s.as_str()))
     }
 
+    /// P0b 快路径：(struct_id, fid) → slot 二分查询。查无（宿主构造值
+    /// `struct_id: u32::MAX`、对抗性字节码）返回 None——调用方走原线性
+    /// 扫描回退，语义逐位保留。
+    fn struct_slot(&self, struct_id: u32, fid: u32) -> Option<u32> {
+        let table = self.struct_slots.get(struct_id as usize)?;
+        let i = table.binary_search_by_key(&fid, |&(f, _)| f).ok()?;
+        Some(table[i].1)
+    }
+
+    /// 装载期预计算：struct 声明表字段序 → (fid, slot) 升序表。
+    /// 稳定排序保重复 fid 取首个 slot——对齐线性扫描「首个命中」语义
+    /// （typeck 拒重复字段，此为对抗性字节码护栏）。
+    fn build_struct_slots(
+        m: &Lbc0Module,
+        fid_of_str: &HashMap<u32, u32>,
+    ) -> Vec<Box<[(u32, u32)]>> {
+        m.structs
+            .iter()
+            .map(|st| {
+                let mut pairs: Vec<(u32, u32)> = st
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, sidx)| fid_of_str.get(sidx).map(|fid| (*fid, slot as u32)))
+                    .collect();
+                pairs.sort_by_key(|&(f, _)| f);
+                pairs.dedup_by_key(|&mut (f, _)| f);
+                pairs.into_boxed_slice()
+            })
+            .collect()
+    }
+
     fn field_name(&self, fid: u32) -> Result<String, VmError> {
         let sidx = self
             .module_ref()
@@ -1487,22 +1548,38 @@ impl Vm {
         if Rc::strong_count(&s) == 1 {
             {
                 let mut s = s.borrow_mut();
-                match s.fields.iter_mut().find(|(f, _)| *f == fid) {
-                    Some(slot) => slot.1 = value,
-                    None => {
-                        return Err(self.rerr("Y-R9012", format!("struct has no field id {fid}")));
-                    }
+                // P0b 快路径：静态槽位 + fid 复核（宿主构造值字段自对齐
+                // 可能与声明表漂移），未命中回退线性扫描。
+                let hit = self
+                    .struct_slot(s.struct_id, fid)
+                    .filter(|&i| (i as usize) < s.fields.len() && s.fields[i as usize].0 == fid);
+                match hit {
+                    Some(i) => s.fields[i as usize].1 = value,
+                    None => match s.fields.iter_mut().find(|(f, _)| *f == fid) {
+                        Some(slot) => slot.1 = value,
+                        None => {
+                            return Err(
+                                self.rerr("Y-R9012", format!("struct has no field id {fid}"))
+                            );
+                        }
+                    },
                 }
             }
             Ok(Value::Struct(s))
         } else {
             let mut copy = s.borrow().clone();
             self.alloc(copy.fields.len() as i64 * 16 + 32)?;
-            match copy.fields.iter_mut().find(|(f, _)| *f == fid) {
-                Some(slot) => slot.1 = value,
-                None => {
-                    return Err(self.rerr("Y-R9012", format!("struct has no field id {fid}")));
-                }
+            let hit = self
+                .struct_slot(copy.struct_id, fid)
+                .filter(|&i| (i as usize) < copy.fields.len() && copy.fields[i as usize].0 == fid);
+            match hit {
+                Some(i) => copy.fields[i as usize].1 = value,
+                None => match copy.fields.iter_mut().find(|(f, _)| *f == fid) {
+                    Some(slot) => slot.1 = value,
+                    None => {
+                        return Err(self.rerr("Y-R9012", format!("struct has no field id {fid}")));
+                    }
+                },
             }
             Ok(Value::Struct(Rc::new(RefCell::new(copy))))
         }
@@ -1662,6 +1739,19 @@ mod tests {
         .expect("run");
         let Value::Int(t) = v else { panic!("int") };
         assert_eq!(t, 100 + 10 + 10, "spread 更新不改原值（决策 13 COW）");
+    }
+
+    #[test]
+    fn struct_slot_table_disambiguates_layouts() {
+        // P0b：A {x,y} 与 B {y,x} 同名字段槽位不同——槽位表按 struct_id
+        // 分桶（非按站点），读写各自精确（快路径 fid 复核防串桶）。
+        // 1255 = 1·1000 + 2·100 + 4·10 + 3 + (10 + 2)。
+        let v = run_src(
+            "struct A { x: int, y: int }\nstruct B { y: int, x: int }\n\npub fn main() -> int {\n    let a = A { x: 1, y: 2 }\n    let b = B { y: 3, x: 4 }\n    let a2 = A { ..a, x: 10 }\n    return a.x * 1000 + a.y * 100 + b.x * 10 + b.y + a2.x + a2.y\n}\n",
+        )
+        .expect("run");
+        let Value::Int(t) = v else { panic!("int") };
+        assert_eq!(t, 1255, "同名字段跨 struct 布局须精确消歧");
     }
 
     #[test]
