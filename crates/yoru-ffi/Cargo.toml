@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "Host embedding bridge for the Yoru language"
+repository.workspace = true
 
 [lints]
 workspace = true

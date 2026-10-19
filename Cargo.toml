@@ -23,6 +23,7 @@ edition = "2024"
 # 旧值 1.82 从未真实验证（CI 未激活），本次迁移时以 1.85.0 实测全绿补齐证据。
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/SantaChains/yoru"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

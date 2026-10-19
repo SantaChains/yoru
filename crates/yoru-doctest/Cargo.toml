@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "Doctest runner for embedded Yoru code blocks"
+repository.workspace = true
 
 [dependencies]
 yoru-syntax = { path = "../yoru-syntax" }
